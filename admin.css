@@ -1,0 +1,88 @@
+.my-favorite-blocks-admin .my-favorite-blocks-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill,minmax(260px,1fr));
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.my-favorite-blocks-admin .my-favorite-blocks-item {
+    display: block;
+    padding: 6px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+}
+
+.my-favorite-blocks-admin .my-favorite-blocks-item input[type="checkbox"] {
+    margin-right: 6px;
+}
+
+.my-favorite-blocks-admin .mfb-item-title {
+    font-weight: 600;
+    display: inline-block;
+}
+
+.my-favorite-blocks-admin .mfb-item-name,
+.my-favorite-blocks-admin .mfb-item-category {
+    display: block;
+    font-size: 11px;
+    color: #666;
+}
+
+.my-favorite-blocks-admin h2.title {
+    margin-top: 32px;
+}
+
+.my-favorite-blocks-admin .mfb-category-title {
+    margin-top: 24px;
+}
+
+/* プレビュー用 */
+#mfb-favorite-preview {
+    margin: 12px 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); /* 好みで調整 */
+    gap: 8px;
+}
+
+#mfb-favorite-preview li {
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    background: #f9f9f9;
+    cursor: move;
+    font-size: 12px;
+}
+
+#mfb-favorite-preview li span.mfb-preview-name {
+    display: block;
+    font-size: 10px;
+    color: #666;
+}
+/* プレビューの × ボタン */
+#mfb-favorite-preview .mfb-preview-remove {
+  margin-left: 10px;
+  background: #bbb !important;   /* ← ここが重要 */
+  color: #fff !important;
+  border: none;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  font-weight: bold;
+  line-height: 20px;
+  padding: 0;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+#mfb-favorite-preview .mfb-preview-remove:hover {
+  background: #888 !important;
+  transform: scale(1.05);
+}
+
+#mfb-favorite-preview .mfb-preview-remove:active {
+  background: #666 !important;
+}

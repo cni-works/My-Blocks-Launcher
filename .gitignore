@@ -1,0 +1,8 @@
+*.zip
+COPY-EXISTING-FILES-HERE.md
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+*.log

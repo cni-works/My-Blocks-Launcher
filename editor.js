@@ -8,6 +8,33 @@
   const blocks = wp.blocks;
   const domReady = wp.domReady;
   const data = wp.data;
+  const favoriteLabels =
+    settings.favoriteLabels && typeof settings.favoriteLabels === 'object'
+      ? settings.favoriteLabels
+      : {};
+  const inserterSelectors = {
+    toggle: [
+      '.block-editor-button-block-appender',
+      '.block-editor-inserter__toggle',
+      '.block-editor-block-list__insertion-point button',
+      '.block-editor-default-block-appender button',
+      '.edit-post-header-toolbar__inserter-toggle',
+      '.editor-document-tools__inserter-toggle',
+    ].join(', '),
+    documentToggle:
+      '.edit-post-header-toolbar__inserter-toggle, ' +
+      '.editor-document-tools__inserter-toggle',
+    panel: '.block-editor-inserter__panel-content',
+    popover: '.components-popover',
+    scope: '.block-editor-inserter__popover, .block-editor-inserter',
+    searchArea:
+      '.block-editor-inserter__search, ' +
+      '.block-editor-inserter__search-input, ' +
+      '.components-search-control',
+    blockList: '.block-editor-block-types-list',
+    quickBlockList:
+      '.block-editor-block-types-list[aria-orientation="horizontal"]',
+  };
 
   if (!blocks || !domReady || !data) {
     return;
@@ -25,82 +52,362 @@
     });
   }
 
-  // ------------------------------------------
-  // 最後の保険：空段落を1つ入れる
-  // ------------------------------------------
-  function insertFallbackParagraph() {
-    try {
-      const dispatcher = data.dispatch('core/block-editor');
-      if (!dispatcher || typeof dispatcher.insertBlocks !== 'function') return;
+  let openedInserterPoint = null;
+  let openedInserterPointTime = 0;
+  let lastVisibleInsertionPoint = null;
+  let lastVisibleInsertionPointTime = 0;
 
-      const p = blocks.createBlock('core/paragraph', { content: '' });
-      if (p) dispatcher.insertBlocks(p);
+  function copyInsertionPoint(point) {
+    if (!point || typeof point.index !== 'number' || point.index < 0) {
+      return null;
+    }
+
+    return {
+      rootClientId: point.rootClientId || null,
+      index: point.index,
+    };
+  }
+
+  function captureInsertionPoint() {
+    try {
+      const selector = data.select('core/block-editor');
+      if (!selector || typeof selector.getBlockInsertionPoint !== 'function') {
+        return null;
+      }
+
+      return copyInsertionPoint(selector.getBlockInsertionPoint());
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function rootsMatch(firstRootClientId, secondRootClientId) {
+    return (firstRootClientId || null) === (secondRootClientId || null);
+  }
+
+  function captureVisibleInsertionPoint() {
+    try {
+      const selector = data.select('core/block-editor');
+      if (!selector) return null;
+
+      if (typeof selector.isBlockInsertionPointVisible !== 'function') {
+        return null;
+      }
+
+      if (!selector.isBlockInsertionPointVisible()) {
+        return null;
+      }
+
+      return captureInsertionPoint();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function rememberVisibleInsertionPoint() {
+    const point = captureVisibleInsertionPoint();
+    if (!point) return;
+
+    lastVisibleInsertionPoint = point;
+    lastVisibleInsertionPointTime = Date.now();
+  }
+
+  function getPreferredInsertionPoint() {
+    const savedPoint = copyInsertionPoint(openedInserterPoint);
+    const savedRecently = Date.now() - openedInserterPointTime < 3000;
+
+    // 開いたインサーターの位置は、そのパネルへ一度渡したら破棄する。
+    // 古い位置が次に開いたインサーターへ持ち越されるのを防ぐ。
+    openedInserterPoint = null;
+    openedInserterPointTime = 0;
+
+    if (savedPoint && savedRecently) {
+      return savedPoint;
+    }
+
+    const visiblePoint = captureVisibleInsertionPoint();
+    const trackedPoint = copyInsertionPoint(lastVisibleInsertionPoint);
+    const trackedRecently = Date.now() - lastVisibleInsertionPointTime < 3000;
+
+    lastVisibleInsertionPoint = null;
+    lastVisibleInsertionPointTime = 0;
+
+    if (visiblePoint) {
+      return copyInsertionPoint(visiblePoint);
+    }
+
+    if (trackedPoint && trackedRecently) {
+      return trackedPoint;
+    }
+
+    return captureInsertionPoint();
+  }
+
+  function getInnerBlocksRootFromToggle(toggle, selector) {
+    let node = toggle;
+    const ownerBody =
+      toggle.ownerDocument && toggle.ownerDocument.body
+        ? toggle.ownerDocument.body
+        : document.body;
+
+    while (node) {
+      if (node.matches && node.matches('[data-block]')) {
+        const clientId = node.getAttribute('data-block');
+
+        if (clientId && typeof selector.getBlockListSettings === 'function') {
+          try {
+            if (typeof selector.getBlockListSettings(clientId) !== 'undefined') {
+              return clientId;
+            }
+          } catch (e) {}
+        }
+      }
+
+      if (node === ownerBody) break;
+      node = node.parentElement;
+    }
+
+    return null;
+  }
+
+  function getSelectedBlockContextPoint(selector) {
+    try {
+      if (
+        typeof selector.getSelectedBlockClientId !== 'function' ||
+        typeof selector.getBlockIndex !== 'function'
+      ) {
+        return null;
+      }
+
+      const selectedId = selector.getSelectedBlockClientId();
+      if (!selectedId) return null;
+
+      const rootClientId =
+        typeof selector.getBlockRootClientId === 'function'
+          ? selector.getBlockRootClientId(selectedId)
+          : null;
+      const index = selector.getBlockIndex(selectedId, rootClientId || undefined);
+
+      return copyInsertionPoint({
+        rootClientId: rootClientId || null,
+        index: typeof index === 'number' && index >= 0 ? index + 1 : 0,
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function rememberOpenedInserter(event) {
+    const target = event && event.target;
+    if (!target || typeof target.closest !== 'function') return;
+
+    const toggle = target.closest(inserterSelectors.toggle);
+    if (!toggle) return;
+
+    try {
+      const selector = data.select('core/block-editor');
+      if (!selector) return;
+
+      const rootClientId = getInnerBlocksRootFromToggle(toggle, selector);
+      const currentPoint = captureInsertionPoint();
+      const selectedPoint = getSelectedBlockContextPoint(selector);
+      const isDocumentInserter = toggle.matches(inserterSelectors.documentToggle);
+      const fallbackPoint =
+        !rootClientId &&
+        !isDocumentInserter &&
+        selectedPoint &&
+        selectedPoint.rootClientId
+          ? selectedPoint
+          : currentPoint;
+      const effectiveRootClientId =
+        rootClientId || (fallbackPoint && fallbackPoint.rootClientId) || null;
+      let index = null;
+
+      // ブロック間の「＋」ではData APIが持つ正確なindexを使う。
+      // DOMから判定したInnerBlocksと同じrootの場合だけ採用する。
+      if (
+        currentPoint &&
+        rootsMatch(currentPoint.rootClientId, effectiveRootClientId)
+      ) {
+        index = currentPoint.index;
+      }
+
+      if (
+        typeof index !== 'number' &&
+        fallbackPoint &&
+        rootsMatch(fallbackPoint.rootClientId, effectiveRootClientId)
+      ) {
+        index = fallbackPoint.index;
+      }
+
+      // ButtonBlockAppenderは、そのInnerBlocks領域の末尾を表す。
+      if (
+        typeof index !== 'number' &&
+        typeof selector.getBlockCount === 'function'
+      ) {
+        index = selector.getBlockCount(effectiveRootClientId || undefined);
+      }
+
+      openedInserterPoint = copyInsertionPoint({
+        rootClientId: effectiveRootClientId,
+        index:
+          typeof index === 'number'
+            ? index
+            : currentPoint && typeof currentPoint.index === 'number'
+              ? currentPoint.index
+              : 0,
+      });
+      openedInserterPointTime = Date.now();
     } catch (e) {}
   }
 
+  function isExistingInsertionPoint(selector, point) {
+    if (!point) return false;
+
+    if (
+      point.rootClientId &&
+      typeof selector.getBlock === 'function' &&
+      !selector.getBlock(point.rootClientId)
+    ) {
+      return false;
+    }
+
+    if (typeof selector.getBlockCount === 'function') {
+      const count = selector.getBlockCount(point.rootClientId || undefined);
+      if (typeof count === 'number' && point.index > count) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function canInsertBlocksAt(selector, blocksArray, rootClientId) {
+    try {
+      if (typeof selector.canInsertBlockType === 'function') {
+        return blocksArray.every(function (block) {
+          return (
+            block &&
+            block.name &&
+            selector.canInsertBlockType(block.name, rootClientId || undefined) !== false
+          );
+        });
+      }
+    } catch (e) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function getInsertionTarget(selector, blocksArray, preferredPoint) {
+    const savedPoint = copyInsertionPoint(preferredPoint);
+
+    // 1) 実際に開いたインサーターの位置。挿入禁止なら外側へ逃がさない。
+    if (savedPoint && isExistingInsertionPoint(selector, savedPoint)) {
+      if (canInsertBlocksAt(selector, blocksArray, savedPoint.rootClientId)) {
+        return savedPoint;
+      }
+
+      return null;
+    }
+
+    const selectedId =
+      typeof selector.getSelectedBlockClientId === 'function'
+        ? selector.getSelectedBlockClientId()
+        : null;
+
+    // 2) 選択中ブロックに、Data APIへ登録されたInnerBlocks領域がある場合。
+    if (selectedId && typeof selector.getBlockListSettings === 'function') {
+      try {
+        const listSettings = selector.getBlockListSettings(selectedId);
+        if (typeof listSettings !== 'undefined') {
+          const innerCount =
+            typeof selector.getBlockCount === 'function'
+              ? selector.getBlockCount(selectedId)
+              : typeof selector.getBlockOrder === 'function'
+                ? selector.getBlockOrder(selectedId).length
+                : 0;
+
+          if (canInsertBlocksAt(selector, blocksArray, selectedId)) {
+            return { rootClientId: selectedId, index: innerCount };
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3) 選択中ブロックと同じ親階層で、その直後。
+    if (selectedId && typeof selector.getBlockIndex === 'function') {
+      try {
+        const rootClientId =
+          typeof selector.getBlockRootClientId === 'function'
+            ? selector.getBlockRootClientId(selectedId)
+            : null;
+        const indexInRoot = selector.getBlockIndex(selectedId, rootClientId || undefined);
+
+        if (
+          typeof indexInRoot === 'number' &&
+          indexInRoot >= 0 &&
+          canInsertBlocksAt(selector, blocksArray, rootClientId)
+        ) {
+          return { rootClientId: rootClientId || null, index: indexInRoot + 1 };
+        }
+      } catch (e) {}
+    }
+
+    // 4) 最終フォールバックはトップレベル。ただし挿入可能な場合だけ。
+    if (canInsertBlocksAt(selector, blocksArray, null)) {
+      const topLevelIndex =
+        typeof selector.getBlockCount === 'function'
+          ? selector.getBlockCount()
+          : typeof selector.getBlockOrder === 'function'
+            ? selector.getBlockOrder().length
+            : undefined;
+
+      return {
+        rootClientId: null,
+        index: typeof topLevelIndex === 'number' ? topLevelIndex : undefined,
+      };
+    }
+
+    return null;
+  }
+
   // --------------------------------------------------
-  // できるだけ「挿入ポイント（+の場所）」へ挿入する
-  // 取れない/失敗する場合は「選択ブロック直後」→「とにかくinsert」
+  // 保存済み挿入ポイントから共通ルールで挿入先を決める
   // --------------------------------------------------
-  function insertAtCurrentPosition(blocksToInsert) {
+  function insertAtCurrentPosition(blocksToInsert, preferredPoint) {
     const selector = data.select('core/block-editor');
     const dispatcher = data.dispatch('core/block-editor');
 
     if (!selector || !dispatcher || typeof dispatcher.insertBlocks !== 'function') {
-      return;
+      return false;
     }
 
     const blocksArray = Array.isArray(blocksToInsert)
       ? blocksToInsert
       : [blocksToInsert];
 
-    // A) まずは「+ボタンの挿入ポイント」
+    const target = getInsertionTarget(selector, blocksArray, preferredPoint);
+    if (!target) return false;
+
     try {
-      if (typeof selector.getBlockInsertionPoint === 'function') {
-        const point = selector.getBlockInsertionPoint();
-        if (point && typeof point.index === 'number') {
-          dispatcher.insertBlocks(blocksArray, point.index, point.rootClientId);
-          return;
-        }
-      }
-    } catch (e) {}
-
-    // B) 次に「選択中ブロックの直後」
-    try {
-      const selectedId =
-        typeof selector.getSelectedBlockClientId === 'function'
-          ? selector.getSelectedBlockClientId()
-          : null;
-
-      if (selectedId && typeof selector.getBlockIndex === 'function') {
-        const rootClientId =
-          typeof selector.getBlockRootClientId === 'function'
-            ? selector.getBlockRootClientId(selectedId)
-            : null;
-
-        const indexInRoot = selector.getBlockIndex(selectedId, rootClientId || undefined);
-        if (typeof indexInRoot === 'number') {
-          dispatcher.insertBlocks(blocksArray, indexInRoot + 1, rootClientId || undefined);
-          return;
-        }
-      }
-    } catch (e) {}
-
-    // C) 最後：とにかく挿入（無反応を防ぐ）
-    try {
-      dispatcher.insertBlocks(blocksArray);
-    } catch (e) {}
+      dispatcher.insertBlocks(blocksArray, target.index, target.rootClientId || undefined);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   // --------------------------------------------------
-  // 空段落なら置き換え / 空カラムなら中へ / それ以外は挿入ポイントへ
+  // 空段落なら置き換え / それ以外は共通の挿入先へ
   // --------------------------------------------------
-  function insertBlocksSmart(blocksToInsert) {
+  function insertBlocksSmart(blocksToInsert, preferredPoint) {
     const selector = data.select('core/block-editor');
     const dispatcher = data.dispatch('core/block-editor');
 
     if (!selector || !dispatcher || typeof dispatcher.insertBlocks !== 'function') {
-      return;
+      return false;
     }
 
     const blocksArray = Array.isArray(blocksToInsert)
@@ -124,50 +431,119 @@
         Array.isArray(selectedBlock.innerBlocks) && selectedBlock.innerBlocks.length > 0;
 
       if (!hasInner && !content.replace(/&nbsp;/gi, ' ').trim()) {
-        dispatcher.replaceBlocks(selectedId, blocksArray);
-        return;
+        const rootClientId =
+          typeof selector.getBlockRootClientId === 'function'
+            ? selector.getBlockRootClientId(selectedId)
+            : null;
+        const selectedIndex =
+          typeof selector.getBlockIndex === 'function'
+            ? selector.getBlockIndex(selectedId, rootClientId || undefined)
+            : -1;
+        const savedPoint = copyInsertionPoint(preferredPoint);
+        const pointsAtSelectedParagraph =
+          !savedPoint ||
+          (rootsMatch(savedPoint.rootClientId, rootClientId) &&
+            savedPoint.index === selectedIndex + 1);
+
+        if (
+          pointsAtSelectedParagraph &&
+          canInsertBlocksAt(selector, blocksArray, rootClientId)
+        ) {
+          dispatcher.replaceBlocks(selectedId, blocksArray);
+          return true;
+        }
       }
     }
 
-    // 2) column が選択中なら、その中へ
-    if (selectedBlock && selectedBlock.name === 'core/column') {
-      const innerCount = Array.isArray(selectedBlock.innerBlocks)
-        ? selectedBlock.innerBlocks.length
-        : 0;
+    return insertAtCurrentPosition(blocksArray, preferredPoint);
+  }
 
-      dispatcher.insertBlocks(blocksArray, innerCount, selectedId);
-      return;
+  // 最後の保険も、通常挿入と同じ保存済み挿入先を使う。
+  function insertFallbackParagraph(preferredPoint) {
+    try {
+      const paragraph = blocks.createBlock('core/paragraph', { content: '' });
+      return paragraph ? insertBlocksSmart(paragraph, preferredPoint) : false;
+    } catch (e) {
+      return false;
     }
+  }
 
-    // 3) それ以外は挿入ポイントへ
-    insertAtCurrentPosition(blocksArray);
+  function createFavoriteBlock(blockName) {
+    try {
+      const blockTypesSelector = data.select('core/blocks');
+      const defaultVariation =
+        blockTypesSelector &&
+        typeof blockTypesSelector.getDefaultBlockVariation === 'function'
+          ? blockTypesSelector.getDefaultBlockVariation(blockName, 'inserter')
+          : null;
+      const variationScope =
+        defaultVariation && Array.isArray(defaultVariation.scope)
+          ? defaultVariation.scope
+          : ['block', 'inserter'];
+      const shouldApplyVariation =
+        defaultVariation &&
+        defaultVariation.isDefault === true &&
+        variationScope.indexOf('inserter') !== -1;
+
+      if (!shouldApplyVariation) {
+        return blocks.createBlock(blockName);
+      }
+
+      const innerBlocks =
+        Array.isArray(defaultVariation.innerBlocks) &&
+        typeof blocks.createBlocksFromInnerBlocksTemplate === 'function'
+          ? blocks.createBlocksFromInnerBlocksTemplate(defaultVariation.innerBlocks)
+          : [];
+
+      return blocks.createBlock(
+        blockName,
+        defaultVariation.attributes || {},
+        innerBlocks
+      );
+    } catch (e) {
+      return blocks.createBlock(blockName);
+    }
   }
 
   // ------------------------------------------
   // 検索ボックス右側に「無反応時段落」ボタンを追加
-  // ※ 検索入力での絞り込みは環境差が大きいので行わない
   // ------------------------------------------
-  function addEmergencyParagraphButton(panel) {
+  function getInserterScope(panel) {
+    return (
+      panel.closest(inserterSelectors.scope) ||
+      panel.parentElement ||
+      panel
+    );
+  }
+
+  function getInserterSearchArea(panel) {
+    if (!panel) return null;
+    return getInserterScope(panel).querySelector(inserterSelectors.searchArea);
+  }
+
+  function getInserterSearchInput(panel) {
+    if (!panel) return null;
+
+    const searchArea = getInserterSearchArea(panel);
+
+    if (!searchArea) return null;
+
+    return (
+      searchArea.querySelector('input.components-search-control__input') ||
+      searchArea.querySelector('input[type="search"]') ||
+      searchArea.querySelector('input')
+    );
+  }
+
+  function addEmergencyParagraphButton(panel, initialInsertionPoint) {
     if (!panel || panel.dataset.mfbEmergencyPara === '1') return;
 
     // パネル周辺（ポップアップ全体）から検索エリアを探す
-    const scope =
-      panel.closest('.block-editor-inserter__popover') ||
-      panel.closest('.block-editor-inserter') ||
-      panel.parentElement ||
-      panel;
-
-    const searchArea =
-      scope.querySelector('.block-editor-inserter__search') ||
-      scope.querySelector('.block-editor-inserter__search-input') ||
-      scope.querySelector('.components-search-control');
+    const searchArea = getInserterSearchArea(panel);
 
     if (!searchArea) return;
 
-    const input =
-      searchArea.querySelector('input.components-search-control__input') ||
-      searchArea.querySelector('input[type="search"]') ||
-      searchArea.querySelector('input');
+    const input = getInserterSearchInput(panel);
 
     if (!input) return;
 
@@ -214,6 +590,8 @@
     paraBtn.style.color = '#fff';
     paraBtn.style.border = 'none';
 
+    let buttonInsertionPoint = copyInsertionPoint(initialInsertionPoint);
+
     paraBtn.addEventListener('mouseenter', function () {
       paraBtn.style.backgroundColor = '#333';
     });
@@ -222,58 +600,20 @@
       paraBtn.style.backgroundColor = '#000';
     });
 
-    // 入れ子コンテナ優先 → 選択ブロック直後 → 最後の保険
     paraBtn.addEventListener(
       'pointerdown',
-      function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        try {
-          const selector = data.select('core/block-editor');
-          const dispatcher = data.dispatch('core/block-editor');
-          if (!selector || !dispatcher || typeof dispatcher.insertBlocks !== 'function') {
-            return;
-          }
-
-          const p = blocks.createBlock('core/paragraph', { content: '' });
-          const selectedId =
-            typeof selector.getSelectedBlockClientId === 'function'
-              ? selector.getSelectedBlockClientId()
-              : null;
-
-          // ① 選択中が入れ子コンテナなら「その中」へ
-          if (selectedId && typeof selector.getBlock === 'function') {
-            const selectedBlock = selector.getBlock(selectedId);
-            if (selectedBlock && Array.isArray(selectedBlock.innerBlocks)) {
-              const innerCount = selectedBlock.innerBlocks.length;
-              dispatcher.insertBlocks([p], innerCount, selectedId);
-              return;
-            }
-          }
-
-          // ② 選択ブロックの直後へ
-          if (selectedId && typeof selector.getBlockIndex === 'function') {
-            const rootClientId =
-              typeof selector.getBlockRootClientId === 'function'
-                ? selector.getBlockRootClientId(selectedId)
-                : null;
-
-            const indexInRoot = selector.getBlockIndex(selectedId, rootClientId || undefined);
-            if (typeof indexInRoot === 'number') {
-              dispatcher.insertBlocks([p], indexInRoot + 1, rootClientId || undefined);
-              return;
-            }
-          }
-
-          // ③ 最後の保険：通常挿入
-          dispatcher.insertBlocks([p]);
-        } catch (err) {
-          insertFallbackParagraph();
-        }
+      function () {
+        buttonInsertionPoint =
+          captureVisibleInsertionPoint() || buttonInsertionPoint;
       },
       true
     );
+
+    paraBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      insertFallbackParagraph(buttonInsertionPoint);
+    });
 
     holder.appendChild(paraBtn);
     searchArea.appendChild(holder);
@@ -296,12 +636,13 @@
     // ------------------------------------------
     // お気に入りグリッドを生成
     // ------------------------------------------
-    function createGridElement() {
+    function createGridElement(initialInsertionPoint) {
       const wrapper = document.createElement('div');
       wrapper.className = 'my-favorite-blocks-grid';
       wrapper.style.gridTemplateColumns = 'repeat(' + columns + ', minmax(0, 1fr))';
 
       let count = 0;
+      let gridInsertionPoint = copyInsertionPoint(initialInsertionPoint);
 
       favorites.forEach(function (name) {
         if (count >= limit) return;
@@ -317,12 +658,12 @@
             : null;
 
         if (blockType) {
-          label = blockType.title || name;
+          label = favoriteLabels[name] || blockType.title || name;
         } else if (vkPatternsMap[name]) {
           // 2) VK Block Patterns
           isPattern = true;
           const p = vkPatternsMap[name];
-          label = p.title || name;
+          label = favoriteLabels[name] || p.title || name;
           patternContent = p.content || '';
         } else {
           return; // 見つからなければスキップ
@@ -333,14 +674,26 @@
         btn.className = 'components-button my-favorite-blocks-item';
         btn.textContent = label;
 
+        // clickでフォーカスが移る前に、開いたインサーターの位置を保存する。
+        btn.addEventListener(
+          'pointerdown',
+          function () {
+            gridInsertionPoint =
+              captureVisibleInsertionPoint() || gridInsertionPoint;
+          },
+          true
+        );
+
         btn.addEventListener('click', function () {
+          const insertionPoint = copyInsertionPoint(gridInsertionPoint);
+
           try {
             // -----------------------------
             // VK パターン
             // -----------------------------
             if (isPattern) {
               if (!patternContent) {
-                insertFallbackParagraph();
+                insertFallbackParagraph(insertionPoint);
                 return;
               }
 
@@ -363,21 +716,19 @@
                 });
 
                 if (paragraph) {
-                  insertBlocksSmart(paragraph);
-                  inserted = true;
+                  inserted = insertBlocksSmart(paragraph, insertionPoint);
                 }
               } else {
                 // ブロック構文付きパターンは parse してそのまま挿入
                 const parsed = blocks.parse(content);
                 if (parsed && parsed.length) {
-                  insertBlocksSmart(parsed);
-                  inserted = true;
+                  inserted = insertBlocksSmart(parsed, insertionPoint);
                 }
               }
 
               // ここまで何も挿入できなかった場合 → 空段落だけでも入れる
               if (!inserted) {
-                insertFallbackParagraph();
+                insertFallbackParagraph(insertionPoint);
               }
 
               return;
@@ -386,14 +737,14 @@
             // -----------------------------
             // 通常ブロック
             // -----------------------------
-            const newBlock = blocks.createBlock(name);
+            const newBlock = createFavoriteBlock(name);
             if (newBlock) {
-              insertBlocksSmart(newBlock);
+              insertBlocksSmart(newBlock, insertionPoint);
             } else {
-              insertFallbackParagraph();
+              insertFallbackParagraph(insertionPoint);
             }
           } catch (e) {
-            insertFallbackParagraph();
+            insertFallbackParagraph(insertionPoint);
           }
         });
 
@@ -415,51 +766,188 @@
     // ------------------------------------------
     // Gutenberg の + パネルを書き換え
     // ------------------------------------------
-    function applyToPanels(root) {
-      if (!root || !root.querySelectorAll) return;
+    function isQuickInserterPanel(panel) {
+      // 「すべてのブロックを表示」で開く左サイドバーにも同じ
+      // panel-contentがあるため、＋から開くポップオーバー内だけを対象にする。
+      return Boolean(
+        panel &&
+          typeof panel.closest === 'function' &&
+          panel.closest(inserterSelectors.popover)
+      );
+    }
 
-      const panels = root.querySelectorAll('.block-editor-inserter__panel-content');
+    function syncQuickInserterSearch(panel) {
+      if (!panel || !isQuickInserterPanel(panel)) return;
+
+      const input = getInserterSearchInput(panel);
+      const grid = panel.querySelector('.my-favorite-blocks-grid');
+      const isSearching = Boolean(input && input.value.trim());
+
+      if (grid) {
+        grid.style.display = isSearching ? 'none' : '';
+      }
+
+      panel
+        .querySelectorAll(inserterSelectors.blockList)
+        .forEach(function (blockList) {
+          if (isSearching) {
+            blockList.style.display = '';
+            blockList.removeAttribute('aria-hidden');
+          } else if (blockList.getAttribute('aria-orientation') === 'horizontal') {
+            blockList.style.display = 'none';
+            blockList.setAttribute('aria-hidden', 'true');
+          }
+        });
+
+      const scope = getInserterScope(panel);
+      const emergencyButton = scope.querySelector('.mfb-quick-chip-holder');
+      if (emergencyButton) {
+        emergencyButton.style.display = isSearching ? 'none' : 'flex';
+      }
+    }
+
+    function enableQuickInserterSearch(panel) {
+      const input = getInserterSearchInput(panel);
+      if (!input || input.dataset.mfbSearchListener === '1') return;
+
+      input.dataset.mfbSearchListener = '1';
+      input.addEventListener('input', function () {
+        // Gutenbergの検索結果再描画後に表示を切り替える。
+        window.setTimeout(function () {
+          syncQuickInserterSearch(panel);
+        }, 0);
+      });
+    }
+
+    function applyToPanels(root) {
+      if (!root) return;
+
+      const panels = [];
+      if (root.closest) {
+        const containingPanel = root.closest(inserterSelectors.panel);
+        if (containingPanel) panels.push(containingPanel);
+      }
+      if (
+        root.matches &&
+        root.matches(inserterSelectors.panel)
+      ) {
+        panels.push(root);
+      }
+      if (root.querySelectorAll) {
+        root
+          .querySelectorAll(inserterSelectors.panel)
+          .forEach(function (panel) {
+            panels.push(panel);
+          });
+      }
 
       panels.forEach(function (panel) {
-        if (panel.dataset.mfbApplied === '1') return;
+        if (!isQuickInserterPanel(panel)) return;
+        if (panel.dataset.mfbApplied === '1') {
+          syncQuickInserterSearch(panel);
+          return;
+        }
 
-        const quickList = panel.querySelector(
-          '.block-editor-block-types-list[aria-orientation="horizontal"]'
-        );
+        const quickList = panel.querySelector(inserterSelectors.quickBlockList);
 
         if (!quickList) return;
 
         panel.dataset.mfbApplied = '1';
+
+        // DOMを書き換える前に、このパネルを開いた挿入位置を保存する。
+        const panelInsertionPoint = getPreferredInsertionPoint();
 
         // 元の「最近使ったブロック」を隠す
         quickList.style.display = 'none';
         quickList.setAttribute('aria-hidden', 'true');
 
         // 代わりにお気に入りグリッドを挿入
-        const grid = createGridElement();
+        const grid = createGridElement(panelInsertionPoint);
         panel.insertBefore(grid, quickList);
 
         // 検索ボックス右に「無反応時段落」ボタンを追加
-        addEmergencyParagraphButton(panel);
+        addEmergencyParagraphButton(panel, panelInsertionPoint);
+        enableQuickInserterSearch(panel);
+        syncQuickInserterSearch(panel);
       });
     }
 
-    // 初期適用
-    applyToPanels(document);
+    const observedDocuments = new WeakSet();
+    const observedIframes = new WeakSet();
 
-    // 動的に開かれたインサーターにも適用
-    const observer = new MutationObserver(function (mutations) {
-      mutations.forEach(function (mutation) {
-        mutation.addedNodes.forEach(function (node) {
-          if (!(node instanceof HTMLElement)) return;
-          applyToPanels(node);
+    if (typeof data.subscribe === 'function') {
+      data.subscribe(rememberVisibleInsertionPoint);
+      rememberVisibleInsertionPoint();
+    }
+
+    function observeIframe(iframe) {
+      if (!iframe || observedIframes.has(iframe)) return;
+      observedIframes.add(iframe);
+
+      function observeContentDocument() {
+        try {
+          if (iframe.contentDocument) {
+            observeEditorDocument(iframe.contentDocument);
+          }
+        } catch (e) {}
+      }
+
+      iframe.addEventListener('load', observeContentDocument);
+      observeContentDocument();
+    }
+
+    function findAndObserveIframes(root) {
+      if (!root) return;
+
+      if (root.matches && root.matches('iframe')) {
+        observeIframe(root);
+      }
+      if (root.querySelectorAll) {
+        root.querySelectorAll('iframe').forEach(observeIframe);
+      }
+    }
+
+    function observeEditorDocument(editorDocument) {
+      if (
+        !editorDocument ||
+        !editorDocument.body ||
+        observedDocuments.has(editorDocument)
+      ) {
+        return;
+      }
+
+      observedDocuments.add(editorDocument);
+      // Gutenbergがフォーカスや一時的な挿入位置を変更する前に保持する。
+      editorDocument.addEventListener('pointerdown', rememberOpenedInserter, true);
+      editorDocument.addEventListener(
+        'keydown',
+        function (event) {
+          if (event.key === 'Enter' || event.key === ' ') {
+            rememberOpenedInserter(event);
+          }
+        },
+        true
+      );
+      applyToPanels(editorDocument);
+      findAndObserveIframes(editorDocument);
+
+      const observer = new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+          mutation.addedNodes.forEach(function (node) {
+            if (!node || node.nodeType !== 1) return;
+            applyToPanels(node);
+            findAndObserveIframes(node);
+          });
         });
       });
-    });
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
+      observer.observe(editorDocument.body, {
+        childList: true,
+        subtree: true,
+      });
+    }
+
+    // 親画面と同一オリジンの編集キャンバスiframeを両方監視する。
+    observeEditorDocument(document);
   });
 })();

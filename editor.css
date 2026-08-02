@@ -1,5 +1,5 @@
 .my-favorite-blocks-grid {
-    display: grid !important;
+  display: grid;
     grid-gap: 8px;
     margin-top: 4px;
 }

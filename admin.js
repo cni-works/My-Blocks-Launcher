@@ -5,6 +5,7 @@
 
     var $preview = $('#mfb-favorite-preview');
     var $orderInput = $('#mfb-favorite-order');
+    var labelOptionName = $preview.attr('data-label-option-name') || '';
 
     function getLimit() {
       var v = parseInt($('#mfb-limit').val(), 10);
@@ -18,6 +19,11 @@
 
     // プレビューを「保存された順番」に合わせて組み立てる
 function rebuildPreview() {
+  var currentLabels = {};
+  $preview.find('.mfb-preview-label').each(function () {
+    currentLabels[$(this).closest('li').attr('data-name')] = $(this).val();
+  });
+
   $preview.empty();
 
   // いま保存されている順番（カンマ区切り）
@@ -39,18 +45,32 @@ function rebuildPreview() {
     var $label = $cb.closest('.my-favorite-blocks-item');
     var title  = $label.find('.mfb-item-title').text() || name;
 
-    checkedMap[name] = { title: title };
+    checkedMap[name] = {
+      title: title,
+      customLabel:
+        Object.prototype.hasOwnProperty.call(currentLabels, name)
+          ? currentLabels[name]
+          : $label.attr('data-custom-label') || '',
+    };
   });
 
   var names = [];
 
   function appendItem(name, info) {
+    var inputName = labelOptionName ? labelOptionName + '[' + name + ']' : '';
+    var $labelInput = $('<input type="text" class="mfb-preview-label">')
+      .attr('name', inputName)
+      .attr('placeholder', info.title)
+      .attr('aria-label', info.title + 'のランチャー表示名')
+      .val(info.customLabel);
+
     var $li = $('<li>')
       .attr('data-name', name)
       .append(
-        $('<strong>').text(info.title),
+        $labelInput,
+        $('<span class="mfb-preview-original">').text('元の表示名: ' + info.title),
         $('<span class="mfb-preview-name">').text(name),
-        $('<button type="button" class="mfb-preview-remove">×</button>')
+        $('<button type="button" class="mfb-preview-remove" aria-label="お気に入りから外す">×</button>')
       );
 
     $preview.append($li);
@@ -142,6 +162,20 @@ function rebuildPreview() {
         .prop('checked', false);
 
       rebuildPreview();
+    });
+
+    // 入力中の別名を、再描画後も維持する
+    $preview.on('input', '.mfb-preview-label', function () {
+      var $li = $(this).closest('li');
+      var name = $li.attr('data-name');
+      var value = $(this).val();
+
+      $form.find('.my-favorite-blocks-item').each(function () {
+        var $item = $(this);
+        if ($item.attr('data-block-name') === name) {
+          $item.attr('data-custom-label', value);
+        }
+      });
     });
 
     // チェック状態が変わった時

@@ -49,12 +49,27 @@
 }
 
 #mfb-favorite-preview li {
+    position: relative;
     padding: 4px 8px;
     border-radius: 4px;
     border: 1px solid #ccc;
     background: #f9f9f9;
     cursor: move;
     font-size: 12px;
+}
+
+#mfb-favorite-preview .mfb-preview-label {
+    display: block;
+    width: calc(100% - 30px);
+    min-width: 0;
+    margin: 2px 0 4px;
+    font-weight: 600;
+}
+
+#mfb-favorite-preview .mfb-preview-original {
+    display: block;
+    font-size: 10px;
+    color: #50575e;
 }
 
 #mfb-favorite-preview li span.mfb-preview-name {
@@ -64,7 +79,9 @@
 }
 /* プレビューの × ボタン */
 #mfb-favorite-preview .mfb-preview-remove {
-  margin-left: 10px;
+  position: absolute;
+  top: 6px;
+  right: 6px;
   background: #bbb !important;   /* ← ここが重要 */
   color: #fff !important;
   border: none;

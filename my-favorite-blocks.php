@@ -2,7 +2,7 @@
 /**
  * Plugin Name: My Blocks Launcher
  * Description:ブロック追加ボタンの「最近使ったブロック」エリアを、自分で選んだお気に入りブロックだけに置き換え、ブロック挿入作業を高速化するプラグインです。各種テーマ・ブロック拡張プラグイン・VK Block Patternsにも対応しています。
- * Version: 1.4.6
+ * Version: 1.4.15
  * Author: Oishi Naoto
  * Text Domain: my-favorite-blocks
  * License: GPL v2 or later
@@ -36,6 +36,7 @@ class My_Favorite_Blocks_Plugin {
                 'core/gallery',
                 'core/list',
             ),
+            'favorite_labels' => array(),
         );
     }
 
@@ -54,11 +55,38 @@ class My_Favorite_Blocks_Plugin {
                 array_map( 'sanitize_text_field', (array) $options['favorite_blocks'] )
             )
         );
+        $options['favorite_labels'] = $this->sanitize_favorite_labels(
+            isset( $options['favorite_labels'] ) ? $options['favorite_labels'] : array(),
+            $options['favorite_blocks']
+        );
         $options['enabled'] = isset( $options['enabled'] ) ? (int) $options['enabled'] : 0;
         $options['columns'] = isset( $options['columns'] ) ? max( 1, min( 8, (int) $options['columns'] ) ) : 4;
         $options['limit']   = isset( $options['limit'] ) ? max( 1, min( 48, (int) $options['limit'] ) ) : 12;
 
         return $options;
+    }
+
+    private function sanitize_favorite_labels( $labels, $favorite_blocks ) {
+        $sanitized = array();
+
+        if ( ! is_array( $labels ) ) {
+            return $sanitized;
+        }
+
+        foreach ( $labels as $name => $label ) {
+            if ( ! is_scalar( $label ) ) {
+                continue;
+            }
+
+            $name  = sanitize_text_field( (string) $name );
+            $label = sanitize_text_field( (string) $label );
+
+            if ( $name && '' !== $label && in_array( $name, $favorite_blocks, true ) ) {
+                $sanitized[ $name ] = $label;
+            }
+        }
+
+        return $sanitized;
     }
 
     public function add_settings_page() {
@@ -82,6 +110,7 @@ class My_Favorite_Blocks_Plugin {
     public function sanitize_options( $input ) {
         $defaults = $this->get_default_options();
         $output   = $defaults;
+        $input    = is_array( $input ) ? $input : array();
 
         $import_raw = isset( $_POST['my_favorite_blocks_import'] )
             ? wp_unslash( $_POST['my_favorite_blocks_import'] )
@@ -180,6 +209,11 @@ class My_Favorite_Blocks_Plugin {
             }
         }
 
+        $output['favorite_labels'] = $this->sanitize_favorite_labels(
+            isset( $input['favorite_labels'] ) ? $input['favorite_labels'] : array(),
+            $output['favorite_blocks']
+        );
+
         return $output;
     }
 
@@ -253,8 +287,31 @@ foreach ( $all_types as $name => $type ) {
     }
 
     
-    private function get_vk_patterns_for_admin() {
-        $patterns = array();
+    private function get_vk_patterns_for_admin( $favorite_names = null ) {
+        $patterns        = array();
+        $is_filtered     = is_array( $favorite_names );
+        $requested_names = array();
+        $requested_ids   = array();
+        $found_names     = array();
+
+        if ( $is_filtered ) {
+            foreach ( $favorite_names as $name ) {
+                $name = sanitize_text_field( (string) $name );
+
+                if ( 0 !== strpos( $name, 'vk-block-patterns/' ) ) {
+                    continue;
+                }
+
+                $requested_names[ $name ] = true;
+                if ( preg_match( '#^vk-block-patterns/pattern-([0-9]+)$#', $name, $matches ) ) {
+                    $requested_ids[] = (int) $matches[1];
+                }
+            }
+
+            if ( empty( $requested_names ) ) {
+                return $patterns;
+            }
+        }
 
         /**
          * 1) Lightning VK Block Patterns のカスタム投稿から取得
@@ -262,14 +319,20 @@ foreach ( $all_types as $name => $type ) {
          * 管理画面で作成したパターンは post_type = vk-block-patterns
          * として保存されているので、まずはこちらを優先して読み込みます。
          */
-        if ( post_type_exists( 'vk-block-patterns' ) ) {
+        if ( post_type_exists( 'vk-block-patterns' ) && ( ! $is_filtered || ! empty( $requested_ids ) ) ) {
+            $query_args = array(
+                'post_type'      => 'vk-block-patterns',
+                'post_status'    => 'publish',
+                'posts_per_page' => $is_filtered ? count( $requested_ids ) : -1,
+                'no_found_rows'  => true,
+            );
+
+            if ( $is_filtered ) {
+                $query_args['post__in'] = array_values( array_unique( $requested_ids ) );
+            }
+
             $posts = get_posts(
-                array(
-                    'post_type'      => 'vk-block-patterns',
-                    'post_status'    => 'publish',
-                    'posts_per_page' => -1,
-                    'no_found_rows'  => true,
-                )
+                $query_args
             );
 
             foreach ( $posts as $post ) {
@@ -284,6 +347,7 @@ foreach ( $all_types as $name => $type ) {
                     'category' => 'vk-block-patterns',
                     'plugin'   => 'VK Block Patterns',
                 );
+                $found_names[ $name ] = true;
             }
         }
 
@@ -291,17 +355,27 @@ foreach ( $all_types as $name => $type ) {
          * 2) 念のため、WP_Block_Patterns_Registry からのフォールバックも残す
          *    （テーマ / 他プラグイン経由で register_block_pattern されている場合用）
          */
-        if ( empty( $patterns ) && ( function_exists( 'WP_Block_Patterns_Registry' ) || class_exists( 'WP_Block_Patterns_Registry' ) ) ) {
+        if ( ( empty( $patterns ) || $is_filtered ) && class_exists( 'WP_Block_Patterns_Registry' ) ) {
 
-            if ( class_exists( 'WP_Block_Patterns_Registry' ) ) {
-                $registry = WP_Block_Patterns_Registry::get_instance();
-                $all      = $registry->get_all_registered();
-            } else {
-                $all = array();
-            }
+            $registry = WP_Block_Patterns_Registry::get_instance();
+            $all      = $registry->get_all_registered();
 
-            foreach ( $all as $name => $pattern ) {
+            foreach ( $all as $pattern ) {
+                if ( ! is_array( $pattern ) || empty( $pattern['name'] ) ) {
+                    continue;
+                }
+
+                $name = sanitize_text_field( (string) $pattern['name'] );
+
                 if ( 0 !== strpos( $name, 'vk-block-patterns/' ) ) {
+                    continue;
+                }
+
+                if ( $is_filtered && ! isset( $requested_names[ $name ] ) ) {
+                    continue;
+                }
+
+                if ( isset( $found_names[ $name ] ) ) {
                     continue;
                 }
 
@@ -415,10 +489,12 @@ foreach ( $all_types as $name => $type ) {
                 <h2 class="title">お気に入りの並び順（プレビュー）</h2>
                 <p class="description">
                     下の一覧でチェックしたブロック / VK Block Patterns がここに表示されます。ドラッグ＆ドロップで順序を変更できます。<br>
+                    表示名欄を空にすると元の名前を使い、入力するとランチャー内だけその別名で表示します。<br>
                     上から順番に、ブロックエディタの「＋」ボタンで表示されます。
                 </p>
 
-<ul id="mfb-favorite-preview"></ul>
+<ul id="mfb-favorite-preview"
+    data-label-option-name="<?php echo esc_attr( self::OPTION_KEY . '[favorite_labels]' ); ?>"></ul>
 <input
     type="hidden"
     name="my_favorite_blocks_order"
@@ -445,9 +521,14 @@ foreach ( $all_types as $name => $type ) {
                             $name     = $block['name'];
                             $title    = $block['title'];
                             $category = $block['category'];
-                            $checked  = in_array( $name, $options['favorite_blocks'], true );
+                            $checked      = in_array( $name, $options['favorite_blocks'], true );
+                            $custom_label = isset( $options['favorite_labels'][ $name ] )
+                                ? $options['favorite_labels'][ $name ]
+                                : '';
                             ?>
-                            <label class="my-favorite-blocks-item" data-block-name="<?php echo esc_attr( $name ); ?>">
+                            <label class="my-favorite-blocks-item"
+                                   data-block-name="<?php echo esc_attr( $name ); ?>"
+                                   data-custom-label="<?php echo esc_attr( $custom_label ); ?>">
                                 <input type="checkbox"
                                        class="mfb-favorite-checkbox"
                                        name="<?php echo esc_attr( self::OPTION_KEY ); ?>[favorite_blocks][]"
@@ -475,9 +556,14 @@ foreach ( $all_types as $name => $type ) {
                             <?php
                             $name    = $pattern['name'];   // 例: vk-block-patterns/pattern-2212
                             $title   = $pattern['title'];  // 例: 釣果情報
-                            $checked = in_array( $name, $options['favorite_blocks'], true );
+                            $checked      = in_array( $name, $options['favorite_blocks'], true );
+                            $custom_label = isset( $options['favorite_labels'][ $name ] )
+                                ? $options['favorite_labels'][ $name ]
+                                : '';
                             ?>
-                            <label class="my-favorite-blocks-item" data-block-name="<?php echo esc_attr( $name ); ?>">
+                            <label class="my-favorite-blocks-item"
+                                   data-block-name="<?php echo esc_attr( $name ); ?>"
+                                   data-custom-label="<?php echo esc_attr( $custom_label ); ?>">
                                 <input type="checkbox"
                                        class="mfb-favorite-checkbox"
                                        name="<?php echo esc_attr( self::OPTION_KEY ); ?>[favorite_blocks][]"
@@ -521,14 +607,19 @@ foreach ( $all_types as $name => $type ) {
     }
 
     public function enqueue_editor_assets() {
-        $options      = $this->get_options();
-        $vk_patterns  = $this->get_vk_patterns_for_admin();
+        $options = $this->get_options();
+
+        if ( empty( $options['enabled'] ) ) {
+            return;
+        }
+
+        $vk_patterns = $this->get_vk_patterns_for_admin( $options['favorite_blocks'] );
 
         wp_enqueue_script(
             'my-favorite-blocks-editor',
             plugins_url( 'editor.js', __FILE__ ),
-            array( 'wp-blocks', 'wp-element', 'wp-edit-post', 'wp-data', 'wp-dom-ready' ),
-            '1.4.6',
+            array( 'wp-blocks', 'wp-data', 'wp-dom-ready' ),
+            '1.4.15',
             true
         );
 
@@ -536,7 +627,7 @@ foreach ( $all_types as $name => $type ) {
             'my-favorite-blocks-editor',
             plugins_url( 'editor.css', __FILE__ ),
             array(),
-            '1.3.0'
+            '1.4.15'
         );
 
         wp_localize_script(
@@ -547,6 +638,7 @@ foreach ( $all_types as $name => $type ) {
                 'columns'        => (int) $options['columns'],
                 'limit'          => (int) $options['limit'],
                 'favoriteBlocks' => $options['favorite_blocks'],
+                'favoriteLabels' => $options['favorite_labels'],
                 'vkPatterns'     => $vk_patterns,
             )
         );
@@ -561,14 +653,14 @@ foreach ( $all_types as $name => $type ) {
             'my-favorite-blocks-admin',
             plugins_url( 'admin.css', __FILE__ ),
             array(),
-            '1.3.0'
+            '1.4.8'
         );
 
         wp_enqueue_script(
             'my-favorite-blocks-admin',
             plugins_url( 'admin.js', __FILE__ ),
             array( 'jquery', 'jquery-ui-sortable' ),
-            '1.3.0',
+            '1.4.8',
             true
         );
     }

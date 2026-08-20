@@ -54,8 +54,6 @@
 
   let openedInserterPoint = null;
   let openedInserterPointTime = 0;
-  let lastVisibleInsertionPoint = null;
-  let lastVisibleInsertionPointTime = 0;
 
   function copyInsertionPoint(point) {
     if (!point || typeof point.index !== 'number' || point.index < 0) {
@@ -104,43 +102,32 @@
     }
   }
 
-  function rememberVisibleInsertionPoint() {
-    const point = captureVisibleInsertionPoint();
-    if (!point) return;
-
-    lastVisibleInsertionPoint = point;
-    lastVisibleInsertionPointTime = Date.now();
-  }
-
   function getPreferredInsertionPoint() {
-    const savedPoint = copyInsertionPoint(openedInserterPoint);
-    const savedRecently = Date.now() - openedInserterPointTime < 3000;
+    const savedPoint = getRememberedInserterPoint();
 
-    // 開いたインサーターの位置は、そのパネルへ一度渡したら破棄する。
-    // 古い位置が次に開いたインサーターへ持ち越されるのを防ぐ。
-    openedInserterPoint = null;
-    openedInserterPointTime = 0;
-
-    if (savedPoint && savedRecently) {
+    if (savedPoint) {
       return savedPoint;
     }
 
     const visiblePoint = captureVisibleInsertionPoint();
-    const trackedPoint = copyInsertionPoint(lastVisibleInsertionPoint);
-    const trackedRecently = Date.now() - lastVisibleInsertionPointTime < 3000;
-
-    lastVisibleInsertionPoint = null;
-    lastVisibleInsertionPointTime = 0;
 
     if (visiblePoint) {
       return copyInsertionPoint(visiblePoint);
     }
 
-    if (trackedPoint && trackedRecently) {
-      return trackedPoint;
-    }
-
     return captureInsertionPoint();
+  }
+
+  function getRememberedInserterPoint() {
+    const savedPoint = copyInsertionPoint(openedInserterPoint);
+    const savedRecently = Date.now() - openedInserterPointTime < 30000;
+
+    return savedPoint && savedRecently ? savedPoint : null;
+  }
+
+  function clearOpenedInserterPoint() {
+    openedInserterPoint = null;
+    openedInserterPointTime = 0;
   }
 
   function getInnerBlocksRootFromToggle(toggle, selector) {
@@ -154,9 +141,9 @@
       if (node.matches && node.matches('[data-block]')) {
         const clientId = node.getAttribute('data-block');
 
-        if (clientId && typeof selector.getBlockListSettings === 'function') {
+        if (clientId && typeof selector.getBlock === 'function') {
           try {
-            if (typeof selector.getBlockListSettings(clientId) !== 'undefined') {
+            if (selector.getBlock(clientId)) {
               return clientId;
             }
           } catch (e) {}
@@ -168,6 +155,56 @@
     }
 
     return null;
+  }
+
+  function getBlockListInsertionPointFromToggle(toggle, selector) {
+    if (!toggle || typeof toggle.closest !== 'function') return null;
+
+    const blockList = toggle.closest('.block-editor-block-list__layout');
+    if (!blockList) return null;
+
+    const ownerBlock = blockList.closest('[data-block]');
+    const rootClientId = ownerBlock
+      ? ownerBlock.getAttribute('data-block') || null
+      : null;
+
+    const order =
+      typeof selector.getBlockOrder === 'function'
+        ? selector.getBlockOrder(rootClientId || undefined)
+        : [];
+
+    if (!Array.isArray(order)) return null;
+
+    const ownerDocument = toggle.ownerDocument || document;
+    let index = 0;
+
+    order.some(function (clientId, orderIndex) {
+      let blockNode = null;
+
+      try {
+        blockNode = ownerDocument.querySelector(
+          '[data-block="' + String(clientId).replace(/"/g, '\\"') + '"]'
+        );
+      } catch (e) {}
+
+      if (!blockNode) return false;
+
+      if (blockNode === toggle || blockNode.contains(toggle)) {
+        index = orderIndex;
+        return true;
+      }
+
+      const relation = blockNode.compareDocumentPosition(toggle);
+      if (relation & 4) {
+        index = orderIndex + 1;
+        return false;
+      }
+
+      index = orderIndex;
+      return true;
+    });
+
+    return copyInsertionPoint({ rootClientId: rootClientId, index: index });
   }
 
   function getSelectedBlockContextPoint(selector) {
@@ -201,17 +238,46 @@
     const target = event && event.target;
     if (!target || typeof target.closest !== 'function') return;
 
-    const toggle = target.closest(inserterSelectors.toggle);
+    let toggle = target.closest(inserterSelectors.toggle);
+    const visiblePoint = captureVisibleInsertionPoint();
+
+    // WordPress 7.1では非黒色の挿入ポイントがPopover経由で描画され、
+    // 従来の内部classに一致しない場合がある。表示中の挿入ポイントを持つ
+    // canvas内ボタンであれば、同じインサーター操作として扱う。
+    if (!toggle && visiblePoint) {
+      const button = target.closest('button');
+      if (button && button.ownerDocument !== document) {
+        toggle = button;
+      }
+    }
+
     if (!toggle) return;
 
     try {
       const selector = data.select('core/block-editor');
       if (!selector) return;
 
-      const rootClientId = getInnerBlocksRootFromToggle(toggle, selector);
-      const currentPoint = captureInsertionPoint();
+      const blockListPoint = getBlockListInsertionPointFromToggle(toggle, selector);
+      const domRootClientId = getInnerBlocksRootFromToggle(toggle, selector);
+      const currentPoint = visiblePoint || captureInsertionPoint();
       const selectedPoint = getSelectedBlockContextPoint(selector);
       const isDocumentInserter = toggle.matches(inserterSelectors.documentToggle);
+      const isTrailingAppender = toggle.matches(
+        '.block-editor-button-block-appender, ' +
+          '.block-editor-default-block-appender button'
+      );
+      let rootClientId = blockListPoint
+        ? blockListPoint.rootClientId
+        : domRootClientId;
+
+      // ブロック間の非黒色「＋」はData APIの表示位置が最も正確。
+      // 末尾AppenderはDOM上の親ブロックを優先する。
+      if (isDocumentInserter) {
+        rootClientId = null;
+      } else if (!blockListPoint && !isTrailingAppender && visiblePoint) {
+        rootClientId = visiblePoint.rootClientId || null;
+      }
+
       const fallbackPoint =
         !rootClientId &&
         !isDocumentInserter &&
@@ -219,13 +285,21 @@
         selectedPoint.rootClientId
           ? selectedPoint
           : currentPoint;
-      const effectiveRootClientId =
-        rootClientId || (fallbackPoint && fallbackPoint.rootClientId) || null;
+      const effectiveRootClientId = isDocumentInserter
+        ? null
+        : rootClientId || (fallbackPoint && fallbackPoint.rootClientId) || null;
       let index = null;
+
+      // WordPress 7.1の非黒色「＋」は、Data APIの挿入キューが
+      // トップレベルへ戻る場合がある。クリック元のBlockListを優先する。
+      if (blockListPoint) {
+        index = blockListPoint.index;
+      }
 
       // ブロック間の「＋」ではData APIが持つ正確なindexを使う。
       // DOMから判定したInnerBlocksと同じrootの場合だけ採用する。
       if (
+        typeof index !== 'number' &&
         currentPoint &&
         rootsMatch(currentPoint.rootClientId, effectiveRootClientId)
       ) {
@@ -261,27 +335,6 @@
     } catch (e) {}
   }
 
-  function isExistingInsertionPoint(selector, point) {
-    if (!point) return false;
-
-    if (
-      point.rootClientId &&
-      typeof selector.getBlock === 'function' &&
-      !selector.getBlock(point.rootClientId)
-    ) {
-      return false;
-    }
-
-    if (typeof selector.getBlockCount === 'function') {
-      const count = selector.getBlockCount(point.rootClientId || undefined);
-      if (typeof count === 'number' && point.index > count) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
   function canInsertBlocksAt(selector, blocksArray, rootClientId) {
     try {
       if (typeof selector.canInsertBlockType === 'function') {
@@ -304,11 +357,17 @@
     const savedPoint = copyInsertionPoint(preferredPoint);
 
     // 1) 実際に開いたインサーターの位置。挿入禁止なら外側へ逃がさない。
-    if (savedPoint && isExistingInsertionPoint(selector, savedPoint)) {
-      if (canInsertBlocksAt(selector, blocksArray, savedPoint.rootClientId)) {
+    if (savedPoint) {
+      const canInsert = canInsertBlocksAt(
+        selector,
+        blocksArray,
+        savedPoint.rootClientId
+      );
+      if (canInsert) {
         return savedPoint;
       }
 
+      // 実際に押した「＋」の位置で挿入できない場合、別階層へ逃がさない。
       return null;
     }
 
@@ -604,7 +663,9 @@
       'pointerdown',
       function () {
         buttonInsertionPoint =
-          captureVisibleInsertionPoint() || buttonInsertionPoint;
+          getRememberedInserterPoint() ||
+          captureVisibleInsertionPoint() ||
+          buttonInsertionPoint;
       },
       true
     );
@@ -612,7 +673,10 @@
     paraBtn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      insertFallbackParagraph(buttonInsertionPoint);
+      const insertionPoint =
+        getRememberedInserterPoint() || buttonInsertionPoint;
+      insertFallbackParagraph(insertionPoint);
+      clearOpenedInserterPoint();
     });
 
     holder.appendChild(paraBtn);
@@ -678,14 +742,19 @@
         btn.addEventListener(
           'pointerdown',
           function () {
+            // WordPress 7.1はクイックインサーターのDOMを再利用するため、
+            // グリッド生成時ではなく、選択の直前に最新の開いた位置へ更新する。
             gridInsertionPoint =
-              captureVisibleInsertionPoint() || gridInsertionPoint;
+              getRememberedInserterPoint() ||
+              captureVisibleInsertionPoint() ||
+              gridInsertionPoint;
           },
           true
         );
 
         btn.addEventListener('click', function () {
-          const insertionPoint = copyInsertionPoint(gridInsertionPoint);
+          const insertionPoint =
+            getRememberedInserterPoint() || copyInsertionPoint(gridInsertionPoint);
 
           try {
             // -----------------------------
@@ -745,6 +814,8 @@
             }
           } catch (e) {
             insertFallbackParagraph(insertionPoint);
+          } finally {
+            clearOpenedInserterPoint();
           }
         });
 
@@ -874,25 +945,27 @@
 
     const observedDocuments = new WeakSet();
     const observedIframes = new WeakSet();
-
-    if (typeof data.subscribe === 'function') {
-      data.subscribe(rememberVisibleInsertionPoint);
-      rememberVisibleInsertionPoint();
-    }
+    const observedIframeDocuments = new WeakMap();
 
     function observeIframe(iframe) {
-      if (!iframe || observedIframes.has(iframe)) return;
-      observedIframes.add(iframe);
+      if (!iframe) return;
 
       function observeContentDocument() {
         try {
-          if (iframe.contentDocument) {
-            observeEditorDocument(iframe.contentDocument);
-          }
+          const editorDocument = iframe.contentDocument;
+          if (!editorDocument || !editorDocument.body) return;
+          if (observedIframeDocuments.get(iframe) === editorDocument) return;
+
+          observedIframeDocuments.set(iframe, editorDocument);
+          observeEditorDocument(editorDocument);
         } catch (e) {}
       }
 
-      iframe.addEventListener('load', observeContentDocument);
+      if (!observedIframes.has(iframe)) {
+        observedIframes.add(iframe);
+        iframe.addEventListener('load', observeContentDocument);
+      }
+
       observeContentDocument();
     }
 
@@ -949,5 +1022,11 @@
 
     // 親画面と同一オリジンの編集キャンバスiframeを両方監視する。
     observeEditorDocument(document);
+
+    // WordPress 7.1は同じiframe要素のcontentDocumentだけを交換する場合がある。
+    // iframe要素の追加/loadを取り逃しても、新しいdocumentへ監視を再接続する。
+    window.setInterval(function () {
+      findAndObserveIframes(document);
+    }, 1000);
   });
 })();

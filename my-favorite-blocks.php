@@ -614,12 +614,16 @@ foreach ( $all_types as $name => $type ) {
         }
 
         $vk_patterns = $this->get_vk_patterns_for_admin( $options['favorite_blocks'] );
+        $editor_script_path = plugin_dir_path( __FILE__ ) . 'editor.js';
+        $editor_script_version = file_exists( $editor_script_path )
+            ? (string) filemtime( $editor_script_path )
+            : '1.4.15';
 
         wp_enqueue_script(
             'my-favorite-blocks-editor',
             plugins_url( 'editor.js', __FILE__ ),
             array( 'wp-blocks', 'wp-data', 'wp-dom-ready' ),
-            '1.4.15',
+            $editor_script_version,
             true
         );
 

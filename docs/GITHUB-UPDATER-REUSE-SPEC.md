@@ -563,6 +563,10 @@ add_action(
 
 コールバックは`public`とし、`is_admin()`、`function_exists( 'current_user_can' )`、`force-check`が文字列の`1`であること、対象種別の更新権限を確認してから削除します。優先度5は、WordPress Coreが同じ`load-update-core.php`の優先度10で実行する`wp_update_plugins()`／`wp_update_themes()`より先に独自キャッシュを削除し、同じ画面要求でGitHubを再確認するために維持します。
 
+Pluginでは`update_plugins`、Themeでは`update_themes`権限を使用します。削除対象は、そのUpdaterインスタンスがowner／Repository名から生成したsite transient keyだけです。複数の独自Plugin／Themeが同一サイトに存在しても、別Repositoryのキャッシュを列挙、一括削除、共通キーで削除してはいけません。
+
+この遅延実行方式はMy Blocks Launcher固有の回避策ではなく、Plugin／Theme共通Updaterの必須仕様です。WordPress 7.1を含む対象環境で、Plugin／Themeの読み込み段階にユーザー情報の初期化を要求しないことを保証します。
+
 通常の管理画面・フロント表示ではキャッシュを破棄しません。
 
 ---
@@ -645,6 +649,17 @@ docs/TEST-PLAN.md
 
 `build-release.ps1`を無変更で他製品へコピーしてはいけません。少なくともslug、Headerファイル、必須ファイル、Plugin／Theme種別を対象Repositoryに合わせます。
 
+Updaterを移植するときは、コピー元がVersion 1.4.18以降のforce-check安全化を含むことを確認します。最低限、次をコードレビューします。
+
+- コンストラクタが`maybe_clear_cache_for_forced_check()`を直接呼んでいない
+- コンストラクタは`load-update-core.php`へpublic callbackを優先度5で登録するだけ
+- callback内でのみ`force-check=1`と`current_user_can()`を確認する
+- Pluginは`update_plugins`、Themeは`update_themes`を確認する
+- owner／Repositoryから生成した当該インスタンスのsite transientだけを削除する
+- Plugin／Theme読み込み中に`current_user_can()`を呼ぶ別経路がない
+
+PluginとThemeで変更するのは権限、識別子、更新フィルターなどの製品種別固有部分です。force-checkの遅延hook、優先度、入力検証、Repository単位の削除という考え方は共通部分として変更しません。
+
 ---
 
 ## 18. 通常変更時の共通運用
@@ -655,11 +670,12 @@ Plugin／Child Themeに変更を加えた場合は、原則として次の順で
 
 1. コード修正
 2. 対象に応じた構文検査・動作確認
-3. `build-release.ps1`で配布用ZIP生成
-4. ZIP内容の簡易確認
-5. `git status`と差分確認
-6. Commit
-7. 現在の作業ブランチをPush
+3. Updaterまたはキャッシュ処理を変更した場合はforce-check共通回帰テスト
+4. `build-release.ps1`で配布用ZIP生成
+5. ZIP内容の簡易確認
+6. `git status`と差分確認
+7. Commit
+8. 現在の作業ブランチをPush
 
 作業完了時点で、`release/`内の現在VersionのZIPも必ず最新状態にします。
 
@@ -695,9 +711,11 @@ ZIPはGit管理しません。Commit／Pushされるのはソースとビルド�
 14. DraftでもPre-releaseでもないGitHub Releaseを作成
 15. 専用ZIPをRelease Assetへ添付
 16. Tag・Asset名・ZIP内Version・ZIP rootを再確認
-17. 旧Versionを入れたテストサイトで更新通知を確認
-18. WordPress標準画面から更新
-19. 更新後のVersion、ディレクトリ名、設定、機能を確認
+17. 旧Versionを入れたテストサイトで「再確認してください。」を実行
+18. `force-check=1`でFatal Errorがなく、対象Repositoryだけが再取得されることを確認
+19. 新Versionの更新通知と、更新がない製品の標準自動更新UIを確認
+20. WordPress標準画面から更新
+21. 更新後のVersion、ディレクトリ名、設定、機能を確認
 
 Tag作成、GitHub Release、Asset添付は通常変更では行いません。
 
@@ -734,7 +752,20 @@ Tag作成、GitHub Release、Asset添付は通常変更では行いません。
 12. 設定が保持されている
 13. 製品固有機能が正常
 
-### 20.3 Plugin標準自動更新UI
+### 20.3 force-check共通回帰テスト
+
+PluginとThemeの両方について、WordPress 7.1を含む対象環境で最低限次を確認します。
+
+1. WordPressの「ダッシュボード → 更新 → 再確認してください。」を実行する
+2. `update-core.php?force-check=1`でFatal Errorが発生しない
+3. 対象Repositoryのキャッシュだけが破棄され、他Repositoryのキャッシュが維持される
+4. 同じ画面表示中にGitHubの最新Releaseを再取得できる
+5. 新Versionが存在する場合は更新通知が表示される
+6. 新Versionが存在しない場合も、Pluginでは標準自動更新ON／OFF UIが維持される
+
+可能であれば、Plugin／Theme読み込み直後には`current_user_can()`を呼ばず、`load-update-core.php` callback実行時にだけ権限確認することをテストコードでも検証します。権限なし、文字列以外の`force-check`、複数Repository共存も異常系として確認します。
+
+### 20.4 Plugin標準自動更新UI
 
 1. GitHubの最新Releaseと同じVersionのPluginをテストサイトへインストールする
 2. Plugin一覧に「自動更新を有効化」が表示される
@@ -748,7 +779,7 @@ Tag作成、GitHub Release、Asset添付は通常変更では行いません。
 
 表示確認時は、WordPress全体のPlugin自動更新が無効化されていないこと、実行ユーザーに`update_plugins`権限があることも確認します。MultisiteではNetwork AdminのPlugin画面で確認します。
 
-### 20.4 通知しないことを確認する異常系
+### 20.5 通知しないことを確認する異常系
 
 - Draft
 - Pre-release
@@ -763,7 +794,7 @@ Tag作成、GitHub Release、Asset添付は通常変更では行いません。
 - インストールディレクトリ名とslug不一致
 - APIエラー／timeout／不正JSON
 
-### 20.5 複数製品共存
+### 20.6 複数製品共存
 
 - Class再宣言Fatalが発生しない
 - 各製品が自分のRepositoryだけを確認
@@ -795,6 +826,20 @@ Tag作成、GitHub Release、Asset添付は通常変更では行いません。
 16. GitHub APIレート制限中ではないか
 17. 失敗キャッシュの1時間以内ではないか
 18. WordPressの「もう一度確認する」を実行したか
+
+「再確認してください。」を押した直後に重大なエラーが発生する場合は、次を確認します。
+
+1. PHPエラーログまたは`wp-content/debug.log`でFatal Error本文とstack traceを確認する
+2. stack traceに`current_user_can()`、`wp_get_current_user()`、Updaterコンストラクタが含まれていないか
+3. コンストラクタがforce-check処理を直接実行していないか
+4. `load-update-core.php`への登録が優先度5になっているか
+5. callbackが`public`で、WordPressから呼び出し可能か
+6. `force-check`を文字列として検証しているか
+7. Plugin／Theme種別に対応した権限を確認しているか
+8. 削除するsite transient keyが対象owner／Repository専用か
+9. 同じhookの優先度10でWordPress Coreの更新確認が実行される前に削除できているか
+
+典型的な誤実装は、Plugin／Theme読み込み中のコンストラクタから`current_user_can()`を呼ぶことです。WordPress 7.1ではこの時点が`pluggable.php`読み込み前となり、内部の`wp_get_current_user()`が未定義のため、`force-check=1`時だけFatal Errorになる場合があります。対処は権限確認を省略することではなく、本仕様どおり`load-update-core.php`へ遅延することです。
 
 ZIPを更新できない場合は、さらに次を確認します。
 
@@ -863,7 +908,7 @@ My Blocks Launcherの実装過程で、当初の概念設計から次を具体�
 11. Local VersionとRemote Versionは一致条件ではなく、Remoteが大きいことを通知条件とした
 12. Tag Version、Asset名Version、ZIP内Versionを正式Releaseの一致対象とした
 13. 成功12時間、失敗1時間のsite transientを採用
-14. `force-check=1`時は`load-update-core.php`優先度5へ処理を遅延し、権限確認後に対象Repositoryキャッシュだけを削除
+14. `force-check=1`時は`load-update-core.php`優先度5へ処理を遅延し、callback内の権限確認成功後に対象Repositoryキャッシュだけを削除
 15. owner／Repositoryごとにキャッシュキーを分離
 16. 製品固有namespaceを必須化
 17. Plugin／Theme共通クラス内で処理を分岐
@@ -878,7 +923,8 @@ My Blocks Launcherの実装過程で、当初の概念設計から次を具体�
 26. API障害・Release不正時はLocal VersionとPackageなしの安全なメタデータを返して標準UIを維持
 27. `autoupdate`をUpdater側で固定せず、WordPress標準の利用者設定を尊重
 28. 仕様書だけの作成・確認・改訂では、対象Repositoryのコード、ZIP、Git操作、Release操作を行わない
-29. Plugin読み込み中に`current_user_can()`を実行せず、WordPress 7.1の`pluggable.php`読み込み後に権限確認する
+29. Plugin／Theme読み込み中に`current_user_can()`を実行せず、WordPress 7.1の`pluggable.php`読み込み後に権限確認する
+30. force-check callbackはpublicとし、文字列以外の入力、権限なし、別Repositoryのキャッシュを安全に拒否・維持する
 
 ---
 
@@ -896,8 +942,13 @@ My Blocks Launcherの共通ロジックを維持し、製品固有namespace、ow
 slug、Update URI、Plugin／Theme種別、build-release.ps1を対象Repositoryへ
 合わせてください。
 
+force-check処理はコンストラクタで直接実行しないでください。`load-update-core.php`へ
+public callbackを優先度5で登録し、そのcallback内でのみ`force-check=1`とPlugin／Theme用の
+権限を確認して、対象Repository専用のsite transientだけを削除してください。
+
 実装を進める指示を受けた後、構文検査、Updaterの正常・異常系確認、Plugin標準自動更新
-ON／OFF UIの確認、配布ZIP生成、ZIP構造検証を行ってください。CommitとPushは明示された
+ON／OFF UIの確認、`update-core.php?force-check=1`のFatal回帰確認、複数Repositoryの
+キャッシュ分離確認、配布ZIP生成、ZIP構造検証を行ってください。CommitとPushは明示された
 運用範囲に従い、TagとGitHub Releaseは正式配布の指示がある場合だけ作成してください。
 ```
 

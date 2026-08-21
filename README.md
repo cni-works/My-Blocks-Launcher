@@ -26,12 +26,12 @@ Updaterは次のReleaseだけを更新対象として扱います。
 My-Blocks-Launcher-{version}.zip
 ```
 
-Version 1.4.18の場合は、次の組み合わせになります。
+Version 1.4.19の場合は、次の組み合わせになります。
 
 ```text
-Plugin header: 1.4.18
-GitHub tag:    v1.4.18
-Release asset: My-Blocks-Launcher-1.4.18.zip
+Plugin header: 1.4.19
+GitHub tag:    v1.4.19
+Release asset: My-Blocks-Launcher-1.4.19.zip
 ZIP root:      My-Blocks-Launcher/
 ```
 
@@ -115,9 +115,9 @@ slugはインストール先フォルダ名、Release Asset名、ZIP最上位フ
 Versionは`my-favorite-blocks.php`の`Version`ヘッダーを正とします。Tagには先頭の`v`を付け、ZIP名には付けません。
 
 ```text
-Version: 1.4.18
-Tag: v1.4.18
-ZIP: My-Blocks-Launcher-1.4.18.zip
+Version: 1.4.19
+Tag: v1.4.19
+ZIP: My-Blocks-Launcher-1.4.19.zip
 ```
 
 ## 配布ZIPの作成

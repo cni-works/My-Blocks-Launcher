@@ -2,14 +2,47 @@
 /**
  * Plugin Name: My Blocks Launcher
  * Description:ブロック追加ボタンの「最近使ったブロック」エリアを、自分で選んだお気に入りブロックだけに置き換え、ブロック挿入作業を高速化するプラグインです。各種テーマ・ブロック拡張プラグイン・VK Block Patternsにも対応しています。
- * Version: 1.4.15
+ * Version: 1.4.16
+ * Requires at least: 6.1
  * Author: Oishi Naoto
  * Text Domain: my-favorite-blocks
  * License: GPL v2 or later
+ * Update URI: https://github.com/cni-works/My-Blocks-Launcher
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
+}
+
+$my_blocks_launcher_updater_file = __DIR__ . '/includes/updater/class-github-release-updater.php';
+
+if ( is_readable( $my_blocks_launcher_updater_file ) ) {
+    require_once $my_blocks_launcher_updater_file;
+
+    $my_blocks_launcher_headers = get_file_data(
+        __FILE__,
+        array(
+            'version'    => 'Version',
+            'update_uri' => 'Update URI',
+        ),
+        'plugin'
+    );
+
+    new \CniWorks\MyBlocksLauncher\Updater\GitHub_Release_Updater(
+        array(
+            'type'          => 'plugin',
+            'owner'         => 'cni-works',
+            'repository'    => 'My-Blocks-Launcher',
+            'slug'          => 'My-Blocks-Launcher',
+            'plugin_file'   => plugin_basename( __FILE__ ),
+            'version'       => $my_blocks_launcher_headers['version'],
+            'update_uri'    => $my_blocks_launcher_headers['update_uri'],
+            'requires'      => '6.1',
+            'cache_hours'   => 12,
+            'failure_hours' => 1,
+            'timeout'       => 5,
+        )
+    );
 }
 
 class My_Favorite_Blocks_Plugin {
@@ -617,7 +650,7 @@ foreach ( $all_types as $name => $type ) {
         $editor_script_path = plugin_dir_path( __FILE__ ) . 'editor.js';
         $editor_script_version = file_exists( $editor_script_path )
             ? (string) filemtime( $editor_script_path )
-            : '1.4.15';
+            : '1.4.16';
 
         wp_enqueue_script(
             'my-favorite-blocks-editor',
@@ -631,7 +664,7 @@ foreach ( $all_types as $name => $type ) {
             'my-favorite-blocks-editor',
             plugins_url( 'editor.css', __FILE__ ),
             array(),
-            '1.4.15'
+            '1.4.16'
         );
 
         wp_localize_script(

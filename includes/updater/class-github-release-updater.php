@@ -67,7 +67,11 @@ final class GitHub_Release_Updater {
             strtolower( $this->config['owner'] . '/' . $this->config['repository'] )
         );
 
-        $this->maybe_clear_cache_for_forced_check();
+        add_action(
+            'load-update-core.php',
+            array( $this, 'maybe_clear_cache_for_forced_check' ),
+            5
+        );
 
         $hostname = wp_parse_url( $this->config['update_uri'], PHP_URL_HOST );
         if ( 'plugin' === $this->config['type'] ) {
@@ -189,12 +193,12 @@ final class GitHub_Release_Updater {
     /**
      * Clears only this repository's cache during WordPress's explicit check-again request.
      */
-    private function maybe_clear_cache_for_forced_check() {
-        if ( ! is_admin() ) {
+    public function maybe_clear_cache_for_forced_check() {
+        if ( ! is_admin() || ! function_exists( 'current_user_can' ) ) {
             return;
         }
 
-        $force_check = isset( $_GET['force-check'] ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $force_check = isset( $_GET['force-check'] ) && is_string( $_GET['force-check'] ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended
             ? sanitize_text_field( wp_unslash( $_GET['force-check'] ) ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended
             : '';
 

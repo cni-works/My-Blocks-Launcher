@@ -26,12 +26,12 @@ Updaterは次のReleaseだけを更新対象として扱います。
 My-Blocks-Launcher-{version}.zip
 ```
 
-Version 1.4.17の場合は、次の組み合わせになります。
+Version 1.4.18の場合は、次の組み合わせになります。
 
 ```text
-Plugin header: 1.4.17
-GitHub tag:    v1.4.17
-Release asset: My-Blocks-Launcher-1.4.17.zip
+Plugin header: 1.4.18
+GitHub tag:    v1.4.18
+Release asset: My-Blocks-Launcher-1.4.18.zip
 ZIP root:      My-Blocks-Launcher/
 ```
 
@@ -115,9 +115,9 @@ slugはインストール先フォルダ名、Release Asset名、ZIP最上位フ
 Versionは`my-favorite-blocks.php`の`Version`ヘッダーを正とします。Tagには先頭の`v`を付け、ZIP名には付けません。
 
 ```text
-Version: 1.4.17
-Tag: v1.4.17
-ZIP: My-Blocks-Launcher-1.4.17.zip
+Version: 1.4.18
+Tag: v1.4.18
+ZIP: My-Blocks-Launcher-1.4.18.zip
 ```
 
 ## 配布ZIPの作成
@@ -141,7 +141,7 @@ PowerShellでプロジェクト直下から実行します。
 - 正常なRelease情報: 12時間
 - 通信失敗または不正なRelease情報: 1時間
 - HTTP timeout: 5秒
-- WordPress標準画面の「もう一度確認する」操作: 当該Repositoryのキャッシュを破棄して再確認
+- WordPress標準画面の「もう一度確認する」操作: `load-update-core.php`で権限確認後、当該Repositoryのキャッシュを破棄して再確認
 
 HTTPエラー、タイムアウト、JSON異常、Tag不正、Asset不在などの場合、UpdaterはPackage URLを含まない安全な「更新なし」メタデータを返します。プラグイン本体の通常動作とWordPress標準の自動更新ON／OFF UIを維持します。
 

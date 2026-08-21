@@ -11,7 +11,7 @@
 
 Codexは対象Repositoryの構成を先に確認し、この文書の「共通部分」を維持しながら、「製品固有部分」だけを対象製品に合わせて実装します。
 
-この文書は一般的なGitHub Updaterの解説ではありません。My Blocks Launcher Version 1.4.16で実際に採用したファイル、設定形式、検証、キャッシュ、配布ZIP生成方法を基準にしています。
+この文書は一般的なGitHub Updaterの解説ではありません。My Blocks Launcher Version 1.4.18で実際に採用したファイル、設定形式、検証、キャッシュ、配布ZIP生成方法を基準にしています。
 
 ### 1.1 仕様書作業と実装作業の境界
 
@@ -89,7 +89,7 @@ My-Blocks-Launcher/
 │   └── updater/
 │       └── class-github-release-updater.php
 ├── release/
-│   └── My-Blocks-Launcher-1.4.16.zip
+│   └── My-Blocks-Launcher-1.4.18.zip
 ├── .gitattributes
 ├── .gitignore
 ├── AGENTS.md
@@ -105,7 +105,7 @@ My-Blocks-Launcher/
 ### 4.2 WordPress配布ZIP
 
 ```text
-My-Blocks-Launcher-1.4.16.zip
+My-Blocks-Launcher-1.4.18.zip
 └── My-Blocks-Launcher/
     ├── admin.css
     ├── admin.js
@@ -132,7 +132,7 @@ My-Blocks-Launcher-1.4.16.zip
 - Release Versionとインストール済みVersionの比較
 - WordPress更新データの生成
 - 成功・失敗キャッシュ
-- 強制更新確認時のキャッシュ破棄
+- `load-update-core.php`へ遅延した強制更新確認時のキャッシュ破棄
 - HTTP・JSON・Release異常時のfail-safe処理
 
 My Blocks Launcherでは次の製品固有namespaceを使用しています。
@@ -189,10 +189,10 @@ UpdaterクラスはPluginとThemeの両方を処理できます。対象製品�
 | repo owner | `cni-works` | GitHub Repository所有者 |
 | repo name | `My-Blocks-Launcher` | GitHub Repository名 |
 | slug | `My-Blocks-Launcher` | WordPressインストール先フォルダ名 |
-| Version | `1.4.16` | Plugin HeaderまたはTheme Headerから取得 |
+| Version | `1.4.18` | Plugin HeaderまたはTheme Headerから取得 |
 | namespace | `CniWorks\MyBlocksLauncher\Updater` | 製品ごとに一意にする |
-| Release Asset名 | `My-Blocks-Launcher-1.4.16.zip` | `{slug}-{version}.zip` |
-| Tag名 | `v1.4.16` | `v{version}` |
+| Release Asset名 | `My-Blocks-Launcher-1.4.18.zip` | `{slug}-{version}.zip` |
+| Tag名 | `v1.4.18` | `v{version}` |
 | Update URI | `https://github.com/cni-works/My-Blocks-Launcher` | 対象Repository URL |
 | メインファイル | `my-favorite-blocks.php` | PluginのHeaderを持つPHP |
 | type | `plugin` | Pluginは`plugin`、Themeは`theme` |
@@ -367,7 +367,7 @@ Theme用`build-release.ps1`を作る場合は、Version／Update URI取得元を
 - 成功キャッシュ12時間
 - 失敗キャッシュ1時間
 - Repositoryごとに異なるsite transient key
-- WordPress標準`force-check=1`時だけ権限確認後にキャッシュ破棄
+- WordPress標準`force-check=1`時だけ、`load-update-core.php`優先度5で権限確認後にキャッシュ破棄
 - API異常をPlugin／Theme本体へ伝播させない
 - Source code ZIPをPackageに使用しない
 - PluginではWordPress標準の自動更新ON／OFF UIを使用する
@@ -406,9 +406,9 @@ Theme用`build-release.ps1`を作る場合は、Version／Update URI取得元を
 例:
 
 ```text
-Plugin Header Version: 1.4.16
-GitHub Tag:            v1.4.16
-Release Asset:         My-Blocks-Launcher-1.4.16.zip
+Plugin Header Version: 1.4.18
+GitHub Tag:            v1.4.18
+Release Asset:         My-Blocks-Launcher-1.4.18.zip
 ZIP root:              My-Blocks-Launcher/
 ```
 
@@ -548,6 +548,20 @@ HTTP timeout:          5秒（実装上3～5秒へ制限）
 キャッシュキーはowner／Repository名から生成するため、同一サイト上の複数Updaterで共有されません。
 
 WordPress管理画面の「もう一度確認する」に相当する`force-check=1`要求では、対象Plugin／Themeの更新権限を確認したうえで、そのRepositoryのキャッシュだけを削除します。
+
+この処理をUpdaterのコンストラクタから直接実行してはいけません。WordPress 7.1では有効Pluginの読み込み後に`pluggable.php`が読み込まれるため、Plugin読み込み中の`current_user_can()`は内部の`wp_get_current_user()`が未定義となりFatal Errorを起こします。
+
+コンストラクタでは次のように処理を登録するだけにします。
+
+```php
+add_action(
+    'load-update-core.php',
+    array( $this, 'maybe_clear_cache_for_forced_check' ),
+    5
+);
+```
+
+コールバックは`public`とし、`is_admin()`、`function_exists( 'current_user_can' )`、`force-check`が文字列の`1`であること、対象種別の更新権限を確認してから削除します。優先度5は、WordPress Coreが同じ`load-update-core.php`の優先度10で実行する`wp_update_plugins()`／`wp_update_themes()`より先に独自キャッシュを削除し、同じ画面要求でGitHubを再確認するために維持します。
 
 通常の管理画面・フロント表示ではキャッシュを破棄しません。
 
@@ -699,20 +713,26 @@ Tag作成、GitHub Release、Asset添付は通常変更では行いません。
 - `build-release.ps1` PowerShell構文
 - `git diff --check`
 - 配布ZIPの自動構造検証
+- Plugin読み込み中は`current_user_can()`もキャッシュ削除も実行されないこと
+- `load-update-core.php`へ優先度5のpublic callbackが登録されること
+- `force-check=1`かつ権限ありの場合だけ、対象Repositoryのキャッシュが削除されること
+- 配列など文字列以外の`force-check`値をFatal Errorなしで拒否すること
 
 ### 20.2 正常系
 
 1. テストサイトへ1つ前のVersionをインストール
 2. 新Versionの正式Releaseと専用Assetを公開
 3. WordPressの「もう一度確認する」を実行
-4. 標準更新通知が表示される
-5. 表示VersionがRelease Versionと一致する
-6. 標準画面から更新できる
-7. 更新後もPlugin／Themeが有効
-8. ディレクトリ名がslugのまま
-9. Versionが更新済み
-10. 設定が保持されている
-11. 製品固有機能が正常
+4. `update-core.php?force-check=1`でFatal Errorが発生しない
+5. GitHubキャッシュが削除され、同じ要求でRelease情報が再取得される
+6. 標準更新通知が表示される
+7. 表示VersionがRelease Versionと一致する
+8. 標準画面から更新できる
+9. 更新後もPlugin／Themeが有効
+10. ディレクトリ名がslugのまま
+11. Versionが更新済み
+12. 設定が保持されている
+13. 製品固有機能が正常
 
 ### 20.3 Plugin標準自動更新UI
 
@@ -843,7 +863,7 @@ My Blocks Launcherの実装過程で、当初の概念設計から次を具体�
 11. Local VersionとRemote Versionは一致条件ではなく、Remoteが大きいことを通知条件とした
 12. Tag Version、Asset名Version、ZIP内Versionを正式Releaseの一致対象とした
 13. 成功12時間、失敗1時間のsite transientを採用
-14. `force-check=1`時に権限確認後、対象Repositoryキャッシュだけを削除
+14. `force-check=1`時は`load-update-core.php`優先度5へ処理を遅延し、権限確認後に対象Repositoryキャッシュだけを削除
 15. owner／Repositoryごとにキャッシュキーを分離
 16. 製品固有namespaceを必須化
 17. Plugin／Theme共通クラス内で処理を分岐
@@ -858,6 +878,7 @@ My Blocks Launcherの実装過程で、当初の概念設計から次を具体�
 26. API障害・Release不正時はLocal VersionとPackageなしの安全なメタデータを返して標準UIを維持
 27. `autoupdate`をUpdater側で固定せず、WordPress標準の利用者設定を尊重
 28. 仕様書だけの作成・確認・改訂では、対象Repositoryのコード、ZIP、Git操作、Release操作を行わない
+29. Plugin読み込み中に`current_user_can()`を実行せず、WordPress 7.1の`pluggable.php`読み込み後に権限確認する
 
 ---
 

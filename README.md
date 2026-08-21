@@ -9,7 +9,7 @@ My Blocks Launcherは、ブロックエディターの「最近使ったブロ�
 
 ## GitHub Updater
 
-このプラグインは、PublicなGitHub Repositoryの公開済みReleaseを確認し、WordPress標準のプラグイン更新画面へ更新情報を渡します。Personal Access Tokenは使用しません。
+このプラグインは、PublicなGitHub Repositoryの公開済みReleaseを確認し、WordPress標準のプラグイン更新画面へ更新情報を渡します。Personal Access Tokenは使用しません。WordPress標準の「自動更新を有効化／無効化」に対応し、独自の自動更新UIは追加しません。
 
 Updaterは次のReleaseだけを更新対象として扱います。
 
@@ -26,12 +26,12 @@ Updaterは次のReleaseだけを更新対象として扱います。
 My-Blocks-Launcher-{version}.zip
 ```
 
-Version 1.4.16の場合は、次の組み合わせになります。
+Version 1.4.17の場合は、次の組み合わせになります。
 
 ```text
-Plugin header: 1.4.16
-GitHub tag:    v1.4.16
-Release asset: My-Blocks-Launcher-1.4.16.zip
+Plugin header: 1.4.17
+GitHub tag:    v1.4.17
+Release asset: My-Blocks-Launcher-1.4.17.zip
 ZIP root:      My-Blocks-Launcher/
 ```
 
@@ -115,9 +115,9 @@ slugはインストール先フォルダ名、Release Asset名、ZIP最上位フ
 Versionは`my-favorite-blocks.php`の`Version`ヘッダーを正とします。Tagには先頭の`v`を付け、ZIP名には付けません。
 
 ```text
-Version: 1.4.16
-Tag: v1.4.16
-ZIP: My-Blocks-Launcher-1.4.16.zip
+Version: 1.4.17
+Tag: v1.4.17
+ZIP: My-Blocks-Launcher-1.4.17.zip
 ```
 
 ## 配布ZIPの作成
@@ -143,7 +143,7 @@ PowerShellでプロジェクト直下から実行します。
 - HTTP timeout: 5秒
 - WordPress標準画面の「もう一度確認する」操作: 当該Repositoryのキャッシュを破棄して再確認
 
-HTTPエラー、タイムアウト、JSON異常、Tag不正、Asset不在などの場合、Updaterは更新情報を返しません。プラグイン本体の通常動作は継続します。
+HTTPエラー、タイムアウト、JSON異常、Tag不正、Asset不在などの場合、UpdaterはPackage URLを含まない安全な「更新なし」メタデータを返します。プラグイン本体の通常動作とWordPress標準の自動更新ON／OFF UIを維持します。
 
 ## 初版で対応しないもの
 

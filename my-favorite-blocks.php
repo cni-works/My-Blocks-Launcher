@@ -2,7 +2,7 @@
 /**
  * Plugin Name: My Blocks Launcher
  * Description:ブロック追加ボタンの「最近使ったブロック」エリアを、自分で選んだお気に入りブロックだけに置き換え、ブロック挿入作業を高速化するプラグインです。各種テーマ・ブロック拡張プラグイン・VK Block Patternsにも対応しています。
- * Version: 1.4.16
+ * Version: 1.4.17
  * Requires at least: 6.1
  * Author: Oishi Naoto
  * Text Domain: my-favorite-blocks
@@ -650,7 +650,7 @@ foreach ( $all_types as $name => $type ) {
         $editor_script_path = plugin_dir_path( __FILE__ ) . 'editor.js';
         $editor_script_version = file_exists( $editor_script_path )
             ? (string) filemtime( $editor_script_path )
-            : '1.4.16';
+            : '1.4.17';
 
         wp_enqueue_script(
             'my-favorite-blocks-editor',
@@ -664,7 +664,7 @@ foreach ( $all_types as $name => $type ) {
             'my-favorite-blocks-editor',
             plugins_url( 'editor.css', __FILE__ ),
             array(),
-            '1.4.16'
+            '1.4.17'
         );
 
         wp_localize_script(

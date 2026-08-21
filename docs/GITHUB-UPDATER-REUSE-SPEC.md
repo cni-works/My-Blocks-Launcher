@@ -13,6 +13,19 @@ Codexは対象Repositoryの構成を先に確認し、この文書の「共通�
 
 この文書は一般的なGitHub Updaterの解説ではありません。My Blocks Launcher Version 1.4.16で実際に採用したファイル、設定形式、検証、キャッシュ、配布ZIP生成方法を基準にしています。
 
+### 1.1 仕様書作業と実装作業の境界
+
+この文書の作成、確認、改訂だけを依頼された場合は、仕様書だけを作業対象とします。別途明示された指示がない限り、対象Repositoryに対して次を行いません。
+
+- Plugin／Theme本体やUpdaterコードの変更
+- `build-release.ps1`の追加・変更・実行
+- 配布ZIPの生成・再生成
+- Version変更
+- `git add`、Commit、Push
+- Branch作成、Pull Request、Tag、GitHub Release、Release Asset操作
+
+対象Repositoryへの導入を依頼された場合も、最初にRepositoryを読み取り、既存構成、固有設定、必要な変更、検査方法を報告します。コード変更へ進むよう明示された範囲だけを実装します。
+
 ---
 
 ## 2. Updaterの目的
@@ -53,7 +66,9 @@ WordPress
   ├─ Update URI用WordPressフィルターへ登録
   ├─ GitHub releases/latest APIを確認
   ├─ Tag・Asset・Versionを検証
-  ├─ 新Versionの場合だけWordPressへ更新情報を返す
+  ├─ 有効な更新メタデータをWordPressへ返す
+  │     ├─ 新Version: response（更新あり）
+  │     └─ 同一／旧Version: no_update（更新なし・標準自動更新UIを維持）
   ├─ WordPress標準画面に更新通知を表示
   └─ 利用者が更新すると専用Release Asset ZIPを取得・展開
 ```
@@ -355,6 +370,9 @@ Theme用`build-release.ps1`を作る場合は、Version／Update URI取得元を
 - WordPress標準`force-check=1`時だけ権限確認後にキャッシュ破棄
 - API異常をPlugin／Theme本体へ伝播させない
 - Source code ZIPをPackageに使用しない
+- PluginではWordPress標準の自動更新ON／OFF UIを使用する
+- Updater独自の自動更新UIを追加しない
+- Updater側から自動更新を一律に有効化／無効化しない
 
 初版では次を追加しません。
 
@@ -419,9 +437,32 @@ Installed: 1.4.15
 Release:   1.4.16
 ```
 
-Updaterは`version_compare()`でRelease Versionが大きい場合だけ通知します。
+Updaterは有効なReleaseの更新メタデータをVersionの大小にかかわらずWordPressへ返します。WordPress Coreが`version_compare()`相当の比較を行い、新しい場合は`update_plugins`／`update_themes` transientの`response`、同一または古い場合は`no_update`へ格納します。
 
-### 12.3 Versionを上げない通常変更
+通知が表示される条件は従来どおり「Release VersionがLocal Versionより大きい場合」だけです。ただし、最新版利用中も`no_update`へ製品情報を登録し、Plugin一覧で標準自動更新UIを維持します。
+
+---
+
+### 12.3 PluginのWordPress標準自動更新
+
+PluginはWordPress標準の「自動更新を有効化／無効化」を利用できることを必須とします。独自の設定画面、独自Cron、独自更新実行処理は作りません。
+
+WordPressは、第三者配布Pluginについても更新用site transientの`response`または`no_update`に更新メタデータがある場合、そのPluginを更新対応として扱います。したがってUpdaterは次を満たします。
+
+1. 有効な新Releaseがある場合は、Release Asset URLを含む更新メタデータを返す
+2. 有効なReleaseが同一Versionまたは旧Versionの場合も、更新メタデータを返す
+3. GitHub API障害またはRelease情報不正時は、Local Versionを使ったPackageなしの安全な`no_update`用メタデータを返す
+4. 更新メタデータの`autoupdate`を固定値で返さない
+5. 利用者の選択はWordPress標準の`auto_update_plugins` site optionへ保存させる
+6. 自動更新が有効で新Releaseが検出された場合は、WordPress Coreが通常の更新と同じ専用Release Asset ZIPを使用する
+
+最低限の`no_update`用メタデータには、Plugin識別子、Plugin basename、slug、Local Version、Update URIを含めます。Package URLは更新がない場合やRelease検証に失敗した場合には含めません。
+
+My Blocks Launcher 1.4.16初版のUpdaterは、新Versionがないとフィルターから`false`を返すため、最新版利用中に`no_update`が作られません。この状態ではPlugin一覧が更新非対応と判定し、標準自動更新UIが表示されないため、横展開前に上記仕様へ修正する必要があります。
+
+Child ThemeでもWordPress標準のTheme自動更新UIが利用できる環境では同じ考え方を適用します。ただし、フィルター、識別子、権限、画面はTheme用を使用します。
+
+### 12.4 Versionを上げない通常変更
 
 通常変更でも作業完了時に現在VersionのZIPを`-Force`で最新化します。ただし、そのZIPはローカル確認・バックアップ・次の正式Release準備用です。
 
@@ -531,6 +572,10 @@ WordPress管理画面の「もう一度確認する」に相当する`force-chec
 
 失敗結果を約1時間キャッシュし、即時再試行を繰り返しません。Updater障害によってPlugin／Theme本体、WordPressフロント、管理画面を停止させません。
 
+「更新なし」は、対象製品についてフィルターから単純に`false`を返すという意味ではありません。PluginではLocal Versionを使ったPackageなしの安全な更新メタデータを返し、WordPress Coreの`update_plugins` site transientの`no_update`へ登録させます。これにより、一時的なGitHub障害中も標準自動更新ON／OFF UIを維持します。ThemeもTheme用の識別子で同様に扱います。
+
+失敗時のメタデータにGitHub上の未検証Package URLを含めてはいけません。新しいRelease Assetを取得できたときだけ、検証済みPackage URLを更新用メタデータへ含めます。
+
 初版では利用者向けエラー通知や秘密情報を含むログ出力を追加していません。
 
 ---
@@ -591,6 +636,8 @@ docs/TEST-PLAN.md
 ## 18. 通常変更時の共通運用
 
 Plugin／Child Themeに変更を加えた場合は、原則として次の順で完了します。
+
+この節は、対象Repositoryの実装または保守を依頼された場合の運用です。仕様書だけの作成・確認・改訂には適用しません。
 
 1. コード修正
 2. 対象に応じた構文検査・動作確認
@@ -667,7 +714,21 @@ Tag作成、GitHub Release、Asset添付は通常変更では行いません。
 10. 設定が保持されている
 11. 製品固有機能が正常
 
-### 20.3 通知しないことを確認する異常系
+### 20.3 Plugin標準自動更新UI
+
+1. GitHubの最新Releaseと同じVersionのPluginをテストサイトへインストールする
+2. Plugin一覧に「自動更新を有効化」が表示される
+3. 有効化後に「自動更新を無効化」へ表示が変わる
+4. 再読込後も選択状態が保持される
+5. `auto_update_plugins` site optionに対象Plugin basenameが保存される
+6. 新Versionの有効なReleaseを公開し、更新用transientの`response`に対象Pluginが入る
+7. 自動更新ONの状態でWordPress標準自動更新処理が専用Release Asset ZIPを使用できる
+8. 更新後にVersionとディレクトリ名が正しく、標準自動更新UIと選択状態が維持される
+9. GitHub API障害または不正Release時もPlugin一覧が壊れず、標準自動更新UIが維持される
+
+表示確認時は、WordPress全体のPlugin自動更新が無効化されていないこと、実行ユーザーに`update_plugins`権限があることも確認します。MultisiteではNetwork AdminのPlugin画面で確認します。
+
+### 20.4 通知しないことを確認する異常系
 
 - Draft
 - Pre-release
@@ -682,7 +743,7 @@ Tag作成、GitHub Release、Asset添付は通常変更では行いません。
 - インストールディレクトリ名とslug不一致
 - APIエラー／timeout／不正JSON
 
-### 20.4 複数製品共存
+### 20.5 複数製品共存
 
 - Class再宣言Fatalが発生しない
 - 各製品が自分のRepositoryだけを確認
@@ -724,6 +785,16 @@ ZIPを更新できない場合は、さらに次を確認します。
 - ZIP内VersionがTagと一致するか
 - 開発用ファイルが混入していないか
 - WebサーバーのWordPressディレクトリ書き込み権限があるか
+
+標準自動更新ON／OFFが表示されない場合は、さらに次を確認します。
+
+1. `get_site_transient( 'update_plugins' )`の`response`または`no_update`に対象Plugin basenameが存在するか
+2. 最新版利用中やGitHub API障害時にUpdaterフィルターが単純な`false`を返していないか
+3. 更新メタデータのPlugin basename、slug、Version、Update URIが正しいか
+4. WordPress全体のPlugin自動更新機能がFilterやサーバー運用設定で無効化されていないか
+5. 現在のユーザーに`update_plugins`権限があるか
+6. Multisiteの場合、Network AdminのPlugin画面を確認しているか
+7. `auto_update_plugins` site optionに対象Plugin basenameが保存・削除されるか
 
 ---
 
@@ -782,6 +853,11 @@ My Blocks Launcherの実装過程で、当初の概念設計から次を具体�
 21. 検証済み候補ZIPを完成後に置換する`-Force`方式を採用
 22. Windows PowerShell互換のためHeaderファイルをUTF-8として明示読み込み
 23. 変更のたびに配布ZIPを最新化し、正式配布時だけVersion／Tag／Releaseを進める運用へ整理
+24. PluginではWordPress標準の自動更新ON／OFF UIへ対応
+25. 新Versionがない場合も更新メタデータを返し、WordPress Coreの`no_update`へ登録
+26. API障害・Release不正時はLocal VersionとPackageなしの安全なメタデータを返して標準UIを維持
+27. `autoupdate`をUpdater側で固定せず、WordPress標準の利用者設定を尊重
+28. 仕様書だけの作成・確認・改訂では、対象Repositoryのコード、ZIP、Git操作、Release操作を行わない
 
 ---
 
@@ -792,14 +868,27 @@ My Blocks Launcherの実装過程で、当初の概念設計から次を具体�
 CNI Works GitHub Updaterを導入してください。
 
 最初に既存構成、Header、namespace、slug、Version取得元、配布対象を確認し、
-推測で設定を決めないでください。
+推測で設定を決めないでください。まず確認結果、Repository固有の設定値、変更予定、
+検査予定を報告してください。
 
 My Blocks Launcherの共通ロジックを維持し、製品固有namespace、owner、repo、
 slug、Update URI、Plugin／Theme種別、build-release.ps1を対象Repositoryへ
 合わせてください。
 
-変更後は構文検査、Updaterの正常・異常系確認、配布ZIP生成、ZIP構造検証を
-行ってください。TagとGitHub Releaseは、正式配布の指示がある場合だけ作成してください。
+実装を進める指示を受けた後、構文検査、Updaterの正常・異常系確認、Plugin標準自動更新
+ON／OFF UIの確認、配布ZIP生成、ZIP構造検証を行ってください。CommitとPushは明示された
+運用範囲に従い、TagとGitHub Releaseは正式配布の指示がある場合だけ作成してください。
 ```
 
 このテンプレートを使用する場合でも、対象Repositoryに未コミット変更があるときはそれを保持し、既存機能を壊さない配置を選択します。
+
+---
+
+## 25. WordPress Core仕様の参照先
+
+実装時はWordPress Coreの現在の挙動を公式資料で再確認します。特に次を基準にします。
+
+- [`wp_update_plugins()`](https://developer.wordpress.org/reference/functions/wp_update_plugins/): 第三者配布Pluginの更新応答と`response`／`no_update`への振り分け
+- [`wp_update_themes()`](https://developer.wordpress.org/reference/functions/wp_update_themes/): 第三者配布Themeの更新応答
+- [`wp_ajax_toggle_auto_updates()`](https://developer.wordpress.org/reference/functions/wp_ajax_toggle_auto_updates/): 標準自動更新ON／OFFとsite option
+- [WordPress Core Plugin list table](https://github.com/WordPress/wordpress-develop/blob/trunk/src/wp-admin/includes/class-wp-plugins-list-table.php): 更新対応判定と標準自動更新UIの表示条件

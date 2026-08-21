@@ -107,7 +107,7 @@ final class GitHub_Release_Updater {
 
         $release = $this->get_release();
         if ( null === $release || ! version_compare( $release['version'], $this->config['version'], '>' ) ) {
-            return false;
+            return $this->make_no_update_data( 'plugin' );
         }
 
         return $this->make_update_data( $release, 'plugin' );
@@ -133,7 +133,7 @@ final class GitHub_Release_Updater {
 
         $release = $this->get_release();
         if ( null === $release || ! version_compare( $release['version'], $this->config['version'], '>' ) ) {
-            return false;
+            return $this->make_no_update_data( 'theme' );
         }
 
         return $this->make_update_data( $release, 'theme' );
@@ -359,6 +359,38 @@ final class GitHub_Release_Updater {
 
         if ( 'plugin' === $type ) {
             $update['slug'] = $this->config['slug'];
+        } else {
+            $update['theme'] = $this->config['slug'];
+        }
+
+        return $update;
+    }
+
+    /**
+     * Builds safe metadata for WordPress's no_update collection.
+     *
+     * Returning metadata for the installed version keeps the standard automatic
+     * update toggle available without exposing an unvalidated package URL.
+     *
+     * @param string $type Product type.
+     * @return array<string, string>
+     */
+    private function make_no_update_data( $type ) {
+        $update = array(
+            'id'          => $this->config['update_uri'],
+            'version'     => $this->config['version'],
+            'new_version' => $this->config['version'],
+            'url'         => $this->config['update_uri'],
+            'requires'    => $this->config['requires'],
+        );
+
+        if ( ! empty( $this->config['requires_php'] ) ) {
+            $update['requires_php'] = $this->config['requires_php'];
+        }
+
+        if ( 'plugin' === $type ) {
+            $update['plugin'] = $this->config['plugin_file'];
+            $update['slug']   = $this->config['slug'];
         } else {
             $update['theme'] = $this->config['slug'];
         }
